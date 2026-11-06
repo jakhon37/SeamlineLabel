@@ -8,6 +8,8 @@ const DIR = process.env.E2E_DIR || '/tmp/myseg-e2e'
 const SHOTS = process.env.E2E_SHOTS || DIR
 
 test('label, switch, train, pre-label', async () => {
+  // Trains and pre-labels for real on the CPU, which takes 5 minutes on an older PC
+  test.setTimeout(600000)
   rmSync(DIR, { recursive: true, force: true })
   execFileSync(path.join(REPO, '.venv/bin/python'), [path.join(__dirname, 'make_project.py'), DIR])
   const app = await electron.launch({
