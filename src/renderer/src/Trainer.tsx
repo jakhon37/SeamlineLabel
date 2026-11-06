@@ -82,15 +82,17 @@ export default function Trainer({ data, active, onError, onTraining }: Props) {
     setRuns(list)
     setCurrent((c) => c ?? list[0]?.name ?? null)
   }
+  // Asked rather than assumed: each folder mounts a new Trainer, and another run can outlast the one that ended
+  const syncRunning = () => window.api.activeRun().then((r) => { setRunning(r); onTraining(!!r) })
 
   useEffect(() => {
     reload()
-    window.api.activeRun().then(setRunning)
+    syncRunning()
     const offLog = window.api.onLog((t) => setLog((l) => (l + cleanLog(t)).slice(-20000)))
     const offEvents = window.api.onEvents(({ run, events }) =>
       setRuns((all) => all.map((r) => (r.name === run ? { ...r, events: [...r.events, ...events] } : r)))
     )
-    const offExit = window.api.onExit(() => { setRunning(null); reload() })
+    const offExit = window.api.onExit(() => { syncRunning(); reload() })
     return () => { offLog(); offEvents(); offExit() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

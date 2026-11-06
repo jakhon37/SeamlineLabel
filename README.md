@@ -52,7 +52,7 @@ LabelMe polygons can't have holes, so a hole is saved as one outline with a zero
 
 On the Train page, set **Run on** to **GPU machine over SSH**, then enter `user@host` and a remote folder. You need key-based SSH, rsync on both ends, and a GPU PyTorch for the machine's `python3`.
 
-The app prepares the dataset here, checks there is 3 GB to spare, and uploads it. Training runs detached, so it survives closing the app or a lost connection; the app reattaches when the project opens. When the run ends, the best model comes back and the run's files are removed from the machine.
+The app prepares the dataset here, checks there is 3 GB to spare, and uploads it. Training runs detached, so it survives closing the app, opening another folder or a lost connection; the app reattaches when the project opens. When the run ends, the best model comes back and the run's files are removed from the machine. A run that ends while its folder isn't open waits on the machine until you open that folder again. Another folder can't be opened until a run has finished starting.
 
 `engine/remote_setup.py` builds an isolated environment in the remote folder, linking the machine's PyTorch rather than copying it.
 
@@ -62,4 +62,4 @@ The app prepares the dataset here, checks there is 3 GB to spare, and uploads it
 npm run test:e2e
 ```
 
-Set `MYSEG_E2E_SSH=user@host` to include the remote GPU test.
+`e2e/remote-switch.spec.ts` needs no GPU: `e2e/fake_gpu.ts` stands in for the machine. Set `MYSEG_E2E_SSH=user@host` to include the test on a real one.

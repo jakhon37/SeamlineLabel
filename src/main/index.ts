@@ -20,7 +20,9 @@ let root = ''
 let win: BrowserWindow | null = null
 let job: { proc: ChildProcess; run: string; offset: number; timer: NodeJS.Timeout } | null = null
 type RemoteInfo = { host: string; dir: string; project: string; pid: number; fetched: boolean }
-let remoteJob: { run: string; info: RemoteInfo; events: number; log: number; timer: NodeJS.Timeout; polling: boolean; lost: boolean } | null = null
+// Only ever the open folder's run. `base` is that folder, as `root` moves on when another opens.
+type RemoteJob = { base: string; run: string; info: RemoteInfo; events: number; log: number; timer: NodeJS.Timeout; polling: boolean; lost: boolean }
+let remoteJob: RemoteJob | null = null
 let launching = false
 type PrelabelJob = { proc: ChildProcess; stopped: boolean }
 let prelabelJob: PrelabelJob | null = null
@@ -44,7 +46,8 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'myseg', privileges: { standard: true, supportFetchAPI: true, stream: true, secure: true } }
 ])
 
-const meta = (...p: string[]) => path.join(root, '.myseg', ...p)
+const metaIn = (base: string, ...p: string[]) => path.join(base, '.myseg', ...p)
+const meta = (...p: string[]) => metaIn(root, ...p)
 const sidecar = (name: string, base = root) => path.join(base, name.replace(/\.[^.]+$/, '') + '.json')
 
 // A window can still be saving to the last folder as the next one opens, so each
@@ -112,12 +115,15 @@ async function openProject(dir: string) {
   const images = names.map((name, i) => ({
     name, ...summarize(read[i].doc?.shapes ?? []), broken: read[i].broken
   }))
+  // Starting a run works on the open folder throughout
+  if (launching && base !== root) throw new Error('A training run is starting. Open another folder once it has.')
   stopPrelabel()
   prelabelJob = null
+  if (remoteJob?.base !== base) detachRemote()
   root = base
   opened.add(base)
   await fs.mkdir(meta(), { recursive: true })
-  await resumeRemote()
+  await resumeRemote(base)
   let project = await readJson(meta('project.json'))
   if (!project) {
     // Existing LabelMe folders open with their classes already in place
@@ -226,13 +232,28 @@ async function startRemote(options: any, target: { host: string; dir: string }) 
     `> ${quote(absolute)}/${remoteRun}/out.log 2>&1 < /dev/null & echo $!; }`)).trim())
   const info: RemoteInfo = { host, dir, project, pid, fetched: false }
   await fs.writeFile(path.join(runDir, 'remote.json'), JSON.stringify(info))
-  attachRemote(name, info)
+  attachRemote(root, name, info)
   return name
 }
 
-function attachRemote(name: string, info: RemoteInfo, events = 0) {
-  remoteJob = { run: name, info, events, log: 0, polling: false, lost: false, timer: setInterval(pollRemote, 3000) }
+function attachRemote(base: string, name: string, info: RemoteInfo, events = 0) {
+  remoteJob = { base, run: name, info, events, log: 0, polling: false, lost: false, timer: setInterval(pollRemote, 3000) }
   pollRemote()
+}
+
+// The run trains on without us and reattaches when its folder opens. Work still on its way
+// sees remoteJob has changed and stops, leaving what it didn't save to be read again then.
+function detachRemote() {
+  if (!remoteJob) return
+  clearInterval(remoteJob.timer)
+  remoteJob = null
+}
+
+// Counted once saved, so events that didn't reach the disk are read again
+async function saveEvents(j: RemoteJob, text: string) {
+  await fs.appendFile(metaIn(j.base, 'runs', j.run, 'events.jsonl'), text)
+  j.events += Buffer.byteLength(text)
+  send('train:events', { run: j.run, events: text.trim().split('\n').map((l) => JSON.parse(l)) })
 }
 
 async function pollRemote() {
@@ -244,61 +265,66 @@ async function pollRemote() {
   try {
     const out = await ssh(host, `cd ${dirOf} 2>/dev/null; kill -0 ${pid} 2>/dev/null && S=alive || S=dead; ` +
       `tail -c +${j.events + 1} events.jsonl 2>/dev/null; echo @@SEP; tail -c +${j.log + 1} out.log 2>/dev/null; echo @@SEP; echo $S`)
-    if (j.lost) send('train:log', 'Connection back.\n')
-    j.lost = false
+    if (remoteJob !== j) return
     const [eventText, logText, state] = out.split('@@SEP\n')
     const end = eventText.lastIndexOf('\n')
-    if (end >= 0) {
-      const chunk = eventText.slice(0, end + 1)
-      j.events += Buffer.byteLength(chunk)
-      await fs.appendFile(meta('runs', j.run, 'events.jsonl'), chunk)
-      send('train:events', { run: j.run, events: chunk.trim().split('\n').map((l) => JSON.parse(l)) })
+    if (end >= 0) await saveEvents(j, eventText.slice(0, end + 1))
+    if (remoteJob !== j) return
+    const over = state.trim() === 'dead'
+    // A run that's over stays "lost" until its model is back, so a failure is told once, not every retry
+    if (!over) {
+      if (j.lost) send('train:log', 'Connection back.\n')
+      j.lost = false
     }
     if (logText) {
       j.log += Buffer.byteLength(logText)
       send('train:log', logText)
     }
-    if (state.trim() === 'dead') await finishRemote(j)
+    if (over) await finishRemote(j)
   } catch (e: any) {
     // Training goes on without us; keep trying until the box answers again
-    if (!j.lost) send('train:log', `Connection lost, training continues on ${host}. Retrying… (${e.message})\n`)
+    if (remoteJob === j && !j.lost) send('train:log', `Connection lost, training continues on ${host}. Retrying… (${e.message})\n`)
     j.lost = true
   } finally {
     j.polling = false
   }
 }
 
-async function finishRemote(j: NonNullable<typeof remoteJob>) {
-  clearInterval(j.timer)
+async function finishRemote(j: RemoteJob) {
   const { host, project } = j.info
-  const local = meta('runs', j.run)
+  const local = metaIn(j.base, 'runs', j.run)
   // One read after the process ended, so the last events aren't lost
   const rest = await ssh(host, `tail -c +${j.events + 1} ${project}/.myseg/runs/${j.run}/events.jsonl 2>/dev/null`)
-  if (rest.trim()) {
-    await fs.appendFile(path.join(local, 'events.jsonl'), rest)
-    send('train:events', { run: j.run, events: rest.trim().split('\n').map((l) => JSON.parse(l)) })
-  }
-  send('train:log', 'Bringing the model back…\n')
+  if (remoteJob !== j) return
+  if (rest.trim()) await saveEvents(j, rest)
+  if (remoteJob !== j) return
+  if (!j.lost) send('train:log', 'Bringing the model back…\n')
   await rsync('--exclude=checkpoint_*', '--exclude=events.jsonl', '--exclude=options.json',
     `${host}:${project}/.myseg/runs/${j.run}/`, `${local}/`)
+  // Reattaching does this over, and only the attached job may go on to remove the remote copy
+  if (remoteJob !== j) return
   await fs.writeFile(path.join(local, 'remote.json'), JSON.stringify({ ...j.info, fetched: true }))
   // The run is safe here now; its copy on the remote disk isn't needed
   await ssh(host, `rm -rf ${quote(project)}`)
+  if (remoteJob !== j) return
   send('train:log', 'Remote copy removed.\n')
+  // Polling stops only now: if any of this failed, the next poll tries again
+  clearInterval(j.timer)
   remoteJob = null
   send('train:exit', { run: j.run, code: 0 })
 }
 
-// A run can outlive the app: pick it up again when its project opens
-async function resumeRemote() {
+// A run can outlive the app or a visit to another folder: pick it up again when its project opens
+async function resumeRemote(base: string) {
   if (remoteJob) return
-  const dir = meta('runs')
+  const dir = metaIn(base, 'runs')
   if (!existsSync(dir)) return
   for (const name of await fs.readdir(dir)) {
     const info: RemoteInfo | null = await readJson(path.join(dir, name, 'remote.json'))
     if (info && !info.fetched) {
       const seen = await fs.stat(path.join(dir, name, 'events.jsonl')).then((s) => s.size).catch(() => 0)
-      attachRemote(name, info, seen)
+      // Reading takes time, and another folder may have opened meanwhile
+      if (root === base && !remoteJob) attachRemote(base, name, info, seen)
       return
     }
   }
@@ -389,9 +415,10 @@ function stopLocal() {
   if (job?.proc.pid) process.kill(-job.proc.pid, 'SIGTERM')
 }
 
+// A local run may have started from another folder, so an attached remote run is the one on screen
 async function stopTraining() {
-  stopLocal()
   if (remoteJob) await ssh(remoteJob.info.host, `kill -TERM -${remoteJob.info.pid}`)
+  else stopLocal()
 }
 
 async function writeLabels(file: string, name: string, shapes: any[], size: number[]) {
@@ -513,7 +540,7 @@ function registerIpc() {
   ipcMain.handle('train:start', (_e, options, target) => launch(options, target))
   ipcMain.handle('remote:check', (_e, host: string, dir: string) => checkRemote(host, dir))
   ipcMain.handle('train:stop', stopTraining)
-  ipcMain.handle('train:active', () => job?.run ?? remoteJob?.run ?? null)
+  ipcMain.handle('train:active', () => remoteJob?.run ?? job?.run ?? null)
   ipcMain.handle('dataset:check', (_e, val: number, tile: number) =>
     engine(['prepare', root, '--val-split', String(val), '--tile', String(tile)])
   )

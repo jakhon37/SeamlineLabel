@@ -22,7 +22,7 @@ export default function App() {
         localStorage.setItem('lastProject', next.root)
       }
     } catch (e: any) {
-      setError(e.message)
+      showError(e.message)
     }
   }
 
@@ -30,15 +30,13 @@ export default function App() {
     const initial = new URLSearchParams(location.search).get('project')
     const last = initial ?? localStorage.getItem('lastProject')
     if (last) window.api.openProject(last).then(setData).catch(() => {})
-    window.api.activeRun().then((r) => setTraining(!!r))
-    const off = window.api.onExit(() => setTraining(false))
     const key = (e: KeyboardEvent) => {
       if (!e.ctrlKey) return
       if (e.key === '1') setMode('label')
       if (e.key === '2') setMode('train')
     }
     window.addEventListener('keydown', key)
-    return () => { off(); window.removeEventListener('keydown', key) }
+    return () => window.removeEventListener('keydown', key)
   }, [])
 
   const setProject = (project: Project) => {
