@@ -18,7 +18,7 @@ sharp.cache(false)
 
 let root = ''
 let win: BrowserWindow | null = null
-let job: { proc: ChildProcess; run: string; offset: number; timer: NodeJS.Timeout } | null = null
+let job: { proc: ChildProcess; base: string; run: string; offset: number; timer: NodeJS.Timeout } | null = null
 type RemoteInfo = { host: string; dir: string; project: string; pid: number; fetched: boolean }
 // Only ever the open folder's run. `base` is that folder, as `root` moves on when another opens.
 type RemoteJob = { base: string; run: string; info: RemoteInfo; events: number; log: number; timer: NodeJS.Timeout; polling: boolean; lost: boolean; stopped: boolean }
@@ -251,9 +251,10 @@ function detachRemote() {
 
 // Counted once saved, so events that didn't reach the disk are read again
 async function saveEvents(j: RemoteJob, text: string) {
-  await fs.appendFile(metaIn(j.base, 'runs', j.run, 'events.jsonl'), text)
+  const file = metaIn(j.base, 'runs', j.run, 'events.jsonl')
+  await fs.appendFile(file, text)
   j.events += Buffer.byteLength(text)
-  send('train:events', { run: j.run, events: text.trim().split('\n').map((l) => JSON.parse(l)) })
+  sendEvents(j.run, await fs.readFile(file, 'utf8'))
 }
 
 // An event, so the message stays with the run
@@ -369,9 +370,8 @@ async function listRuns() {
   return Promise.all(
     names.map(async (name) => {
       const raw = await fs.readFile(path.join(dir, name, 'events.jsonl'), 'utf8').catch(() => '')
-      const events = raw.split('\n').filter(Boolean).map((l) => JSON.parse(l))
       return {
-        name, events,
+        name, events: parseEvents(raw),
         options: await readJson(path.join(dir, name, 'options.json')),
         running: job?.run === name || remoteJob?.run === name
       }
@@ -382,6 +382,14 @@ async function listRuns() {
 function send(channel: string, payload: unknown) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
 }
+
+// A last line still being written isn't an event yet
+const parseEvents = (raw: string) =>
+  raw.slice(0, raw.lastIndexOf('\n') + 1).split('\n').filter(Boolean).map((l) => JSON.parse(l))
+
+// The run's whole list each time: the window reads the file as well, whenever it likes,
+// so it can't tell which of a few new events it already has
+const sendEvents = (run: string, raw: string) => send('train:events', { run, events: parseEvents(raw) })
 
 async function launch(options: any, target: { host: string; dir: string } | null) {
   if (job || remoteJob || launching) throw new Error('A training run is already active')
@@ -406,7 +414,7 @@ function startTraining(options: unknown) {
       pending += text
       const found = pending.match(/\{"run": "([^"]+)"\}/)
       if (!found) return
-      const current = { proc, run: found[1], offset: 0, timer: setInterval(pollEvents, 1000) }
+      const current = { proc, base: root, run: found[1], offset: 0, timer: setInterval(pollEvents, 1000) }
       job = current
       resolve(found[1])
     }
@@ -425,14 +433,13 @@ function startTraining(options: unknown) {
 }
 
 async function pollEvents() {
-  if (!job) return
-  const raw = await fs.readFile(meta('runs', job.run, 'events.jsonl'), 'utf8').catch(() => '')
-  const fresh = raw.slice(job.offset)
-  const end = fresh.lastIndexOf('\n')
-  if (end < 0) return
-  job.offset += end + 1
-  const events = fresh.slice(0, end).split('\n').map((l) => JSON.parse(l))
-  send('train:events', { run: job.run, events })
+  const j = job
+  if (!j) return
+  const raw = await fs.readFile(metaIn(j.base, 'runs', j.run, 'events.jsonl'), 'utf8').catch(() => '')
+  const end = raw.lastIndexOf('\n') + 1
+  if (end <= j.offset) return
+  j.offset = end
+  sendEvents(j.run, raw)
 }
 
 function stopLocal() {

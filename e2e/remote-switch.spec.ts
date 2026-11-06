@@ -1,6 +1,6 @@
 import { ElectronApplication, expect, Page, test } from '@playwright/test'
 import { spawnSync } from 'child_process'
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'fs'
 import path from 'path'
 import { FakeGpu, fakeGpu, launch, project, startRemote } from './fake_gpu'
 
@@ -25,6 +25,9 @@ const status = (page: Page) => page.locator('.tile', { hasText: 'Status' })
 const log = (page: Page) => page.getByTestId('log')
 const pulse = (page: Page) => page.locator('.pulse')
 const active = (page: Page) => page.evaluate(() => window.api.activeRun())
+// The chart draws one point per epoch
+const plotted = async (page: Page) =>
+  (await page.getByRole('img', { name: 'Loss' }).locator('polyline').first().getAttribute('points'))!.split(' ').filter(Boolean).length
 
 let app: ElectronApplication | null = null
 let machine: FakeGpu | null = null
@@ -60,6 +63,16 @@ async function running(page: Page, gpu: FakeGpu, dir: string) {
   await expect.poll(() => saved(dir, run), SOON).toEqual([START])
   return run
 }
+
+// A run on this computer: the training only waits, and a test writes its events itself
+async function runningHere(page: Page) {
+  await page.getByRole('tab', { name: /Train/ }).click()
+  await train(page).click()
+  await expect(stop(page)).toBeVisible(STARTED)
+  return (await active(page))!
+}
+const write = (dir: string, run: string, ...events: unknown[]) =>
+  appendFileSync(path.join(runDir(dir, run), 'events.jsonl'), events.map((e) => JSON.stringify(e) + '\n').join(''))
 
 async function pick(page: Page, dir: string) {
   await app!.evaluate(({ dialog }, d) => {
@@ -119,6 +132,7 @@ test('a run trains on while another folder is open, and is picked up again on re
   expect(await active(page)).toBe(run)
   gpu.emit(run, epoch(1))
   await expect.poll(() => saved(a, run), SOON).toEqual([START, epoch(0), epoch(1)])
+  await expect.poll(() => plotted(page), SOON).toBe(2)
   gpu.emit(run, DONE)
   gpu.end(run)
   await expectHome(page, gpu, a, run, [START, epoch(0), epoch(1), DONE])
@@ -412,4 +426,66 @@ test('a folder can\'t open while a run is starting', async () => {
   expect(existsSync(runDir(a, run))).toBe(true)
   expect(JSON.parse(readFileSync(path.join(gpu.projectOf(run), '.myseg/project.json'), 'utf8')).name).toBe('folder-a')
   expect(readdirSync(path.join(b, '.myseg'))).toEqual(['project.json'])
+})
+
+test('a local run\'s chart shows each epoch once after another folder was open', async () => {
+  const { a, b, page } = await setup('local-chart')
+  const run = await runningHere(page)
+  write(a, run, START, epoch(0))
+  await expect.poll(() => plotted(page), SOON).toBe(1)
+
+  // An epoch that ends while nothing shows the run is read on the way back, and only then
+  await openFolder(page, b)
+  write(a, run, epoch(1))
+  await page.waitForTimeout(1500)
+  await openFolder(page, a)
+  await expect.poll(() => plotted(page), SOON).toBe(2)
+  await page.waitForTimeout(1500)
+  expect(await plotted(page)).toBe(2)
+
+  // Later epochs carry on from there
+  write(a, run, epoch(2))
+  await expect.poll(() => plotted(page), SOON).toBe(3)
+  await page.waitForTimeout(1500)
+  expect(await plotted(page)).toBe(3)
+
+  // So does a run that ends with another folder open
+  await openFolder(page, b)
+  write(a, run, epoch(3), DONE)
+  await stop(page).click()
+  await expect(train(page)).toBeVisible(SOON)
+  await openFolder(page, a)
+  await expect(status(page)).toContainText('Finished', SOON)
+  expect(await plotted(page)).toBe(4)
+})
+
+test('going back to the Train tab during a local run shows each epoch once', async () => {
+  const { a, page } = await setup('local-tab')
+  const run = await runningHere(page)
+  for (let i = 0; i < 3; i++) {
+    // Written just before the tab reads the file, so the next one-second read finds it as well
+    await page.keyboard.press('Control+1')
+    write(a, run, epoch(i))
+    await page.keyboard.press('Control+2')
+    await expect.poll(() => plotted(page), SOON).toBe(i + 1)
+    await page.waitForTimeout(1500)
+    expect(await plotted(page)).toBe(i + 1)
+  }
+
+  // A file that can't be read for a moment leaves the chart alone
+  const events = path.join(runDir(a, run), 'events.jsonl')
+  chmodSync(events, 0)
+  await page.waitForTimeout(1500)
+  expect(await plotted(page)).toBe(3)
+  chmodSync(events, 0o644)
+
+  // Nor does an event that's still being written, for the tab's read or the one-second one
+  const line = JSON.stringify(epoch(3)) + '\n'
+  appendFileSync(events, line.slice(0, 20))
+  await page.keyboard.press('Control+1')
+  await page.keyboard.press('Control+2')
+  await page.waitForTimeout(1500)
+  expect(await plotted(page)).toBe(3)
+  appendFileSync(events, line.slice(20))
+  await expect.poll(() => plotted(page), SOON).toBe(4)
 })

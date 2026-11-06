@@ -90,7 +90,7 @@ export default function Trainer({ data, active, onError, onTraining }: Props) {
     syncRunning()
     const offLog = window.api.onLog((t) => setLog((l) => (l + cleanLog(t)).slice(-20000)))
     const offEvents = window.api.onEvents(({ run, events }) =>
-      setRuns((all) => all.map((r) => (r.name === run ? { ...r, events: [...r.events, ...events] } : r)))
+      setRuns((all) => all.map((r) => (r.name === run ? { ...r, events } : r)))
     )
     const offExit = window.api.onExit(() => { syncRunning(); reload() })
     return () => { offLog(); offEvents(); offExit() }
