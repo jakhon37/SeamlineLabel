@@ -303,6 +303,72 @@ test('events that can\'t be saved and a model download that fails are tried agai
   await expectHome(page, gpu, a, run, [START, epoch(0), DONE])
 })
 
+test('a run whose files were removed from the machine ends, and says so', async () => {
+  const { gpu, a, b, page } = await setup('removed')
+  const run = await running(page, gpu, a)
+  await openFolder(page, b)
+  gpu.remove(run)
+  await openFolder(page, a)
+  await expect(status(page)).toContainText('Failed', SOON)
+  await expect(page.locator('.error.static')).toContainText('no longer on gpu@fake')
+  await expect(train(page)).toBeVisible()
+  expect(await active(page)).toBeNull()
+  expect(fetched(a, run)).toBe(true)
+
+  // It stays ended, and the folder can train again
+  await openFolder(page, b)
+  await openFolder(page, a)
+  expect(await active(page)).toBeNull()
+  expect(saved(a, run).filter((e) => e.type === 'error')).toHaveLength(1)
+  await train(page).click()
+  await expect(stop(page)).toBeVisible(STARTED)
+})
+
+test('a run that dies before its first event ends, and says so', async () => {
+  const { gpu, a, page } = await setup('died')
+  await startRemote(page)
+  await expect(stop(page)).toBeVisible(STARTED)
+  const run = (await active(page))!
+  gpu.crash(run, 'ModuleNotFoundError: No module named torch\n')
+  await expect(status(page)).toContainText('Failed', SOON)
+  await expect(page.locator('.error.static')).toContainText('before it reported anything')
+  await expect(log(page)).toContainText('No module named torch')
+  await expect(train(page)).toBeVisible()
+  expect(readFileSync(path.join(runDir(a, run), 'out.log'), 'utf8')).toContain('No module named torch')
+  expect(existsSync(gpu.projectOf(run))).toBe(false)
+  expect(fetched(a, run)).toBe(true)
+  expect(await active(page)).toBeNull()
+})
+
+test('stopping a run before its first event isn\'t a failure', async () => {
+  const { gpu, a, page } = await setup('stopped-early')
+  await startRemote(page)
+  await expect(stop(page)).toBeVisible(STARTED)
+  const run = (await active(page))!
+  await stop(page).click()
+  await expect.poll(() => existsSync(gpu.projectOf(run)), SOON).toBe(false)
+  await expect(train(page)).toBeVisible()
+  await expect(status(page)).toContainText('Stopped')
+  expect(saved(a, run)).toEqual([])
+})
+
+test('a removal whose answer got lost isn\'t taken for a lost model', async () => {
+  const { gpu, a, page } = await setup('lost-answer')
+  const run = await running(page, gpu, a)
+  gpu.fail('rm -rf')
+  gpu.emit(run, DONE)
+  gpu.end(run)
+  await expect(log(page)).toContainText('Connection lost', SOON)
+  // As if the removal worked and only its answer went missing
+  gpu.remove(run)
+  gpu.recover()
+  await expect(train(page)).toBeVisible(SOON)
+  await expect(status(page)).toContainText('Finished')
+  expect(saved(a, run)).toEqual([START, DONE])
+  expect(hasModel(a, run)).toBe(true)
+  expect(fetched(a, run)).toBe(true)
+})
+
 test('Stop stops the run on screen, not one started from another folder', async () => {
   const { gpu, a, b, page } = await setup('stop')
   const remote = await running(page, gpu, a)

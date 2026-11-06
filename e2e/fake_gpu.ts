@@ -63,12 +63,12 @@ exec "$REAL_PYTHON" "$@"
 // Called as: python -u engine/studio.py train PROJECT --options JSON --prepared --run NAME
 const TRAINER = `#!/bin/sh
 run="$4/.myseg/runs/$9"
-touch "$run/events.jsonl"
 i=0
-until [ -e "$4/end" ] || [ $i -ge 1800 ]; do
+until [ -e "$4/end" ] || [ -e "$4/crash" ] || [ $i -ge 1800 ]; do
   sleep 0.1
   i=$((i + 1))
 done
+[ -e "$4/crash" ] && exit 1
 mkdir -p "$run/run_1"
 echo model > "$run/run_1/best_model.pth"
 `
@@ -100,6 +100,12 @@ export function fakeGpu(base: string) {
       events.map((e) => JSON.stringify(e) + '\n').join('')
     ),
     end: (run: string) => writeFileSync(path.join(projectOf(run), 'end'), ''),
+    // Dies with this output and no events, as an engine does that can't import its packages
+    crash: (run: string, output: string) => {
+      appendFileSync(path.join(projectOf(run), '.myseg/runs', run, 'out.log'), output)
+      writeFileSync(path.join(projectOf(run), 'crash'), '')
+    },
+    remove: (run: string) => rmSync(projectOf(run), { recursive: true, force: true }),
     hasModel: (run: string) => existsSync(path.join(projectOf(run), '.myseg/runs', run, 'run_1/best_model.pth')),
     // Commands matching the pattern wait until release, or fail until recover
     hold: (pattern: string) => writeFileSync(path.join(home, 'hold'), pattern),

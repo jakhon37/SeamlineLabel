@@ -54,6 +54,8 @@ On the Train page, set **Run on** to **GPU machine over SSH**, then enter `user@
 
 The app prepares the dataset here, checks there is 3 GB to spare, and uploads it. Training runs detached, so it survives closing the app, opening another folder or a lost connection; the app reattaches when the project opens. When the run ends, the best model comes back and the run's files are removed from the machine. A run that ends while its folder isn't open waits on the machine until you open that folder again. Another folder can't be opened until a run has finished starting.
 
+A run that dies before it reports anything, or whose files are removed from the machine, ends as Failed with a message. A run that died keeps its output in `out.log` in the run's folder.
+
 `engine/remote_setup.py` builds an isolated environment in the remote folder, linking the machine's PyTorch rather than copying it.
 
 ## Test
