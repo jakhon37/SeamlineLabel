@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test } from '@playwright/test'
-import { existsSync, readFileSync, rmSync } from 'fs'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import path from 'path'
 import { execFileSync } from 'child_process'
 
@@ -90,10 +90,64 @@ test('label, switch, train, pre-label', async () => {
   await expect(page.locator('.file.on')).toContainText('zz_large.tif')
   await page.locator('.file', { hasText: 'disc_10.png' }).click()
   await expect(page.locator('.status')).toContainText('320 × 240')
-  await page.getByRole('button', { name: /Pre-label/ }).click()
-  await expect(page.getByRole('button', { name: /Pre-label/ })).toBeEnabled({ timeout: 120000 })
+  await page.getByRole('button', { name: 'Pre-label', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Pre-label', exact: true })).toBeEnabled({ timeout: 120000 })
   await page.waitForTimeout(500)
   await page.screenshot({ path: `${SHOTS}/prelabel.png` })
+
+  // Pre-label the rest with progress: results are saved, scored and not training data yet
+  const startBatch = async () => {
+    await page.getByRole('button', { name: 'Pre-label 3 images' }).click()
+    await expect(page.getByRole('button', { name: /Stop ·/ })).toBeVisible()
+  }
+  const batchEnded = () =>
+    expect(page.getByRole('button', { name: 'Pre-label 3 images' })).toBeVisible({ timeout: 240000 })
+  await startBatch()
+  await batchEnded()
+  await expect(page.getByText('Pre-labelled 3 of 3 images.')).toBeVisible()
+  const predicted = ['disc_10', 'disc_11', 'zz_large'].flatMap((n) =>
+    JSON.parse(readFileSync(path.join(DIR, `${n}.json`), 'utf8')).shapes
+  )
+  console.log(`batch pre-label: ${predicted.length} shapes`)
+  expect(predicted.length).toBeGreaterThan(0)
+  for (const s of predicted) {
+    expect(s.flags.ai).toBe(true)
+    expect(s.score).toBeGreaterThan(0)
+    expect(s.score).toBeLessThanOrEqual(1)
+  }
+  await expect(page.getByText('10/13 labelled')).toBeVisible()
+
+  // A file that can't be read fails alone
+  const good = readFileSync(path.join(DIR, 'disc_11.png'))
+  writeFileSync(path.join(DIR, 'disc_11.png'), 'not an image')
+  await startBatch()
+  await batchEnded()
+  await expect(page.locator('.error')).toContainText('1 image failed. First: disc_11.png')
+  await page.locator('.error').click()
+  writeFileSync(path.join(DIR, 'disc_11.png'), good)
+
+  // An engine that dies is reported, not counted as finished
+  await startBatch()
+  await page.waitForTimeout(1000)
+  execFileSync('pkill', ['-KILL', '-f', `engine/studio.py predict ${DIR}`])
+  await batchEnded()
+  await expect(page.locator('.error')).toContainText(/stopped/i)
+  await page.locator('.error').click()
+
+  // A label file that goes bad while pre-labelling is left as it is
+  const broken = '{"shapes": ['
+  writeFileSync(path.join(DIR, 'disc_10.json'), broken)
+  await startBatch()
+  await batchEnded()
+  await expect(page.locator('.error')).toContainText('disc_10.png')
+  expect(readFileSync(path.join(DIR, 'disc_10.json'), 'utf8')).toBe(broken)
+  await page.locator('.error').click()
+  rmSync(path.join(DIR, 'disc_10.json'))
+
+  // Stop ends it straight away
+  await page.getByRole('button', { name: 'Pre-label 3 images' }).click()
+  await page.getByRole('button', { name: /Stop ·/ }).click()
+  await expect(page.getByText(/Stopped after \d of 3 images/)).toBeVisible({ timeout: 30000 })
   expect(existsSync(path.join(DIR, '.myseg/runs'))).toBe(true)
 
   // Stop ends a run straight away and it reads as stopped, not finished

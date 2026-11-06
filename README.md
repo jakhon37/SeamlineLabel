@@ -12,13 +12,16 @@ npm run build
 npm start
 ```
 
-Open any folder of images. Labels are saved beside each image as LabelMe JSON, so LabelMe and LabelMeV2 can open the same folder. Project settings, the tile cache, the prepared dataset and runs go in `.myseg/` inside that folder.
+Open any folder of images. Labels are saved beside each image as LabelMe JSON, so LabelMe and LabelMeV2 can open the same folder. A label file that can't be read is marked red and never written over. Project settings, the tile cache, the prepared dataset and runs go in `.myseg/` inside that folder.
 
 ## Keys
 
 | Key | Action |
 |---|---|
 | `V` / `P` / `R` | Select and edit / polygon / rectangle |
+| `B` / `E`, `[` `]` | Brush / eraser, brush size |
+| `W` / `S` / `Tab` | Accept / reject / skip the AI shape, then go to the next |
+| `Shift+W` | Accept every AI shape here and go to the next image to review |
 | Click first point, `Enter` or double-click | Close polygon |
 | `1`-`9` | Choose class, or change the selected shape's class |
 | `A` / `D` | Previous / next image |
@@ -34,6 +37,16 @@ Open any folder of images. Labels are saved beside each image as LabelMe JSON, s
 - `../engine/studio.py`: LabelMe JSON to masks, training through `scripts/train.py`, and pre-labelling
 
 Pre-labelled shapes stay dashed and are left out of training until you accept or edit them.
+
+## Review pre-labels
+
+**Pre-label N images** runs the newest model on every image with no accepted shapes, saving as it goes. Press `W` to step through the shapes. **Least certain first** orders images by their least certain shape, and each image's shapes are reviewed in the same order. A shape's score is the model's mean confidence inside it. It's good for ranking but isn't a probability, and an object the model missed has no shape, so no score. `Ctrl+Z` right after moving on goes back to the last image and takes the decision back.
+
+## Brush and eraser
+
+The brush paints the selected shape's class, or the current class if nothing is selected. Shapes of that class it touches merge into one and keep their layer, which also joins shapes split at a tile edge. Where another class sits on a higher layer, it stays on top: erase it to paint there. The eraser cuts from the selected shape, or from everything it touches if nothing is selected, and can split a shape in two.
+
+LabelMe polygons can't have holes, so a hole is saved as one outline with a zero-width cut. The cut shows as a thin line on screen, but it doesn't change the training mask.
 
 ## Train on a GPU machine
 

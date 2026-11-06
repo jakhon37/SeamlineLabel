@@ -12,13 +12,16 @@
     "typecheck": "tsc --noEmit",
     "test:e2e": "electron-vite build && playwright test"
   },
-  "dependencies": { "sharp": "^0.33.5" },
+  "dependencies": {
+    "sharp": "^0.33.5"
+  },
   "devDependencies": {
     "@playwright/test": "1.48.2",
     "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
+    "clipper-lib": "^6.4.2",
     "electron": "^33.2.0",
     "electron-vite": "^2.3.0",
     "lucide-react": "^0.456.0",

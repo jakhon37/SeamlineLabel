@@ -5,10 +5,14 @@ export type Shape = {
   group_id?: number | null
   description?: string
   flags?: Record<string, boolean>
+  score?: number
 }
 export type LabelClass = { name: string; color: string }
 export type Project = { name: string; classes: LabelClass[] }
-export type ImageItem = { name: string; count: number; ai: number }
+export type ImageItem = {
+  name: string; count: number; ai: number; score: number | null; classes: Record<string, number>
+  broken?: boolean
+}
 export type OpenProject = { root: string; project: Project; images: ImageItem[] }
 export type OpenImage = {
   width: number; height: number; file: string; ms: number
@@ -24,8 +28,8 @@ declare global {
       openProject(dir: string): Promise<OpenProject>
       saveProject(project: Project): Promise<void>
       openImage(name: string): Promise<OpenImage>
-      loadLabels(name: string): Promise<Shape[]>
-      saveLabels(name: string, shapes: Shape[], size: number[]): Promise<void>
+      loadLabels(root: string, name: string): Promise<Shape[]>
+      saveLabels(root: string, name: string, shapes: Shape[], size: number[]): Promise<void>
       listRuns(): Promise<Run[]>
       startTraining(options: unknown, target: { host: string; dir: string } | null): Promise<string>
       checkRemote(host: string, dir: string): Promise<{ freeKb: number; gpu: string; gpuJobs: number; torch: string }>
@@ -33,6 +37,11 @@ declare global {
       activeRun(): Promise<string | null>
       checkDataset(val: number, tile: number): Promise<any>
       predict(run: string, images: string[]): Promise<{ device: string; results: Record<string, Shape[]> }>
+      prelabelAll(run: string, names: string[]): Promise<{ done: number; total: number; stopped: boolean; failed: string[]; error?: string }>
+      stopPrelabel(): Promise<void>
+      onPrelabel(fn: (p: { name: string; shapes: Shape[] | null; done: number; total: number }) => void): () => void
+      onFlush(fn: () => void): () => void
+      flushed(): void
       onLog(fn: (text: string) => void): () => void
       onEvents(fn: (p: { run: string; events: TrainEvent[] }) => void): () => void
       onExit(fn: (p: { run: string; code: number }) => void): () => void

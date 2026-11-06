@@ -11,6 +11,8 @@ export default function App() {
   const [mode, setMode] = useState<Mode>('label')
   const [error, setError] = useState('')
   const [training, setTraining] = useState(false)
+  const showError = (message: string) =>
+    setError(message.replace(/^Error invoking remote method '[^']+': (\w*Error: )?/, ''))
 
   const open = async (loader: () => Promise<OpenProject | null>) => {
     try {
@@ -83,10 +85,10 @@ export default function App() {
           {/* Both stay mounted, so switching keeps your place and view */}
           <div className="page" hidden={mode !== 'label'}>
             <Labeler key={data.root} data={data} setProject={setProject} setImages={setImages}
-              active={mode === 'label'} onError={setError} />
+              active={mode === 'label'} onError={showError} />
           </div>
           <div className="page" hidden={mode !== 'train'}>
-            <Trainer key={data.root} data={data} active={mode === 'train'} onError={setError}
+            <Trainer key={data.root} data={data} active={mode === 'train'} onError={showError}
               onTraining={setTraining} />
           </div>
         </>

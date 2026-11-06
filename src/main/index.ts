@@ -5,6 +5,7 @@ import { tmpdir } from 'os'
 import path from 'path'
 import { pathToFileURL } from 'url'
 import sharp from 'sharp'
+import { summarize } from '../shared/labels'
 
 const REPO = path.resolve(__dirname, '../../..')
 const PYTHON = process.env.MYSEG_PYTHON || path.join(REPO, '.venv/bin/python')
@@ -21,6 +22,15 @@ let job: { proc: ChildProcess; run: string; offset: number; timer: NodeJS.Timeou
 type RemoteInfo = { host: string; dir: string; project: string; pid: number; fetched: boolean }
 let remoteJob: { run: string; info: RemoteInfo; events: number; log: number; timer: NodeJS.Timeout; polling: boolean; lost: boolean } | null = null
 let launching = false
+type PrelabelJob = { proc: ChildProcess; stopped: boolean }
+let prelabelJob: PrelabelJob | null = null
+// Label files are read, changed and written back: one at a time, or a pre-label could undo a save
+let writes: Promise<unknown> = Promise.resolve()
+function serial<T>(fn: () => Promise<T>) {
+  const result = writes.then(fn)
+  writes = result.catch(() => {})
+  return result
+}
 
 const SSH_OPTS = [
   '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ControlMaster=auto',
@@ -35,7 +45,16 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 const meta = (...p: string[]) => path.join(root, '.myseg', ...p)
-const sidecar = (name: string) => path.join(root, name.replace(/\.[^.]+$/, '') + '.json')
+const sidecar = (name: string, base = root) => path.join(base, name.replace(/\.[^.]+$/, '') + '.json')
+
+// A window can still be saving to the last folder as the next one opens, so each
+// save names its folder. Only folders opened in this run are accepted.
+const opened = new Set<string>()
+function labelFile(base: string, name: string) {
+  const full = path.resolve(base, name)
+  if (!opened.has(base) || !full.startsWith(base + path.sep)) throw new Error('Path outside project')
+  return sidecar(name, base)
+}
 
 // Image names come from the renderer: never let one leave the project folder
 function inProject(name: string): string {
@@ -52,6 +71,29 @@ async function readJson(file: string): Promise<any | null> {
   }
 }
 
+// No file means no labels yet. A file we can't read is someone's labels, so this throws
+// rather than let anyone write over it.
+async function readLabels(file: string): Promise<any | null> {
+  let text: string
+  try {
+    text = await fs.readFile(file, 'utf8')
+  } catch (e: any) {
+    if (e.code === 'ENOENT') return null
+    throw new Error(`${path.basename(file)} can't be read (${e.code}), so it's left unchanged.`)
+  }
+  let doc: any = null
+  try {
+    doc = JSON.parse(text)
+  } catch {
+    // Reported below with the other bad files
+  }
+  const shapes = doc?.shapes ?? []
+  const valid = doc && typeof doc === 'object' && !Array.isArray(doc) &&
+    Array.isArray(shapes) && shapes.every((s: any) => Array.isArray(s?.points))
+  if (!valid) throw new Error(`${path.basename(file)} isn't a readable label file, so it's left unchanged.`)
+  return doc
+}
+
 async function writeAtomic(file: string, text: string) {
   const tmp = `${file}.${process.pid}.tmp`
   await fs.writeFile(tmp, text)
@@ -59,23 +101,28 @@ async function writeAtomic(file: string, text: string) {
 }
 
 async function openProject(dir: string) {
-  root = path.resolve(dir)
-  await fs.mkdir(meta(), { recursive: true })
-  await resumeRemote()
-  const names = (await fs.readdir(root))
+  // The slow reading comes first: the open folder only changes once it's done
+  const base = path.resolve(dir)
+  const names = (await fs.readdir(base))
     .filter((n) => IMAGE_EXTS.has(path.extname(n).toLowerCase()))
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-  const docs = await Promise.all(names.map((n) => readJson(sidecar(n))))
-  const images = names.map((name, i) => {
-    const shapes: any[] = docs[i]?.shapes ?? []
-    const ai = shapes.filter((s) => s.flags?.ai).length
-    return { name, count: shapes.length - ai, ai }
-  })
+  const read = await Promise.all(names.map((n) =>
+    readLabels(sidecar(n, base)).then((doc) => ({ doc, broken: false }), () => ({ doc: null, broken: true }))
+  ))
+  const images = names.map((name, i) => ({
+    name, ...summarize(read[i].doc?.shapes ?? []), broken: read[i].broken
+  }))
+  stopPrelabel()
+  prelabelJob = null
+  root = base
+  opened.add(base)
+  await fs.mkdir(meta(), { recursive: true })
+  await resumeRemote()
   let project = await readJson(meta('project.json'))
   if (!project) {
     // Existing LabelMe folders open with their classes already in place
     const labels = new Set<string>()
-    docs.forEach((d) => d?.shapes?.forEach((s: any) => s.label && labels.add(s.label)))
+    read.forEach(({ doc }) => doc?.shapes?.forEach((s: any) => s.label && labels.add(s.label)))
     const classes = labels.size ? [...labels].sort() : ['object']
     project = {
       name: path.basename(root),
@@ -347,6 +394,100 @@ async function stopTraining() {
   if (remoteJob) await ssh(remoteJob.info.host, `kill -TERM -${remoteJob.info.pid}`)
 }
 
+async function writeLabels(file: string, name: string, shapes: any[], size: number[]) {
+  // LabelMe format, so LabelMeV2 opens the same files
+  const doc = (await readLabels(file)) ?? { version: '5.5.0', flags: {} }
+  Object.assign(doc, {
+    shapes, imagePath: name, imageData: null, imageWidth: size[0], imageHeight: size[1]
+  })
+  await writeAtomic(file, JSON.stringify(doc, null, 2))
+}
+
+async function predictOne(runName: string, images: string[]) {
+  const lines = (await run(PYTHON, [ENGINE, 'predict', root, '--run', runName, '--images', ...images])).trim().split('\n')
+  const results: Record<string, any[]> = {}
+  let device = ''
+  for (const line of lines.filter((l) => l.startsWith('{')).map((l) => JSON.parse(l))) {
+    if (line.device) device = line.device
+    if (line.error) throw new Error(line.error)
+    if (line.name) results[line.name] = line.shapes
+  }
+  return { device, results }
+}
+
+// Saves as it goes, so stopping keeps what's done. Images someone has labelled are left alone.
+function prelabelAll(runName: string, names: string[]) {
+  if (prelabelJob) throw new Error('Pre-labelling is already running')
+  names.forEach(inProject)
+  const base = root
+  const proc = spawn(PYTHON, [ENGINE, 'predict', root, '--run', runName], {
+    cwd: REPO, detached: true, env: { ...process.env, PYTHONUNBUFFERED: '1' }
+  })
+  const current: PrelabelJob = { proc, stopped: false }
+  prelabelJob = current
+  const failed: string[] = []
+  let done = 0, pending = '', errors = ''
+  let queue = Promise.resolve()
+
+  const onResult = async (r: { name: string; shapes?: any[]; size?: number[]; error?: string }) => {
+    if (prelabelJob !== current) return
+    let shapes: any[] | null = null
+    if (r.error) {
+      failed.push(`${r.name}: ${r.error}`)
+    } else {
+      shapes = await serial(async () => {
+        const file = sidecar(r.name, base)
+        const existing: any[] = (await readLabels(file))?.shapes ?? []
+        if (existing.some((s) => !s.flags?.ai)) return null
+        if (r.shapes!.length || existing.length) await writeLabels(file, r.name, r.shapes!, r.size!)
+        return r.shapes!
+      }).catch((e) => {
+        failed.push(`${r.name}: ${e.message}`)
+        return null
+      })
+    }
+    done++
+    send('prelabel:progress', { name: r.name, shapes, done, total: names.length })
+  }
+
+  return new Promise<{ done: number; total: number; stopped: boolean; failed: string[]; error?: string }>((resolve, reject) => {
+    proc.stdout!.on('data', (chunk: Buffer) => {
+      pending += chunk.toString()
+      const lines = pending.split('\n')
+      pending = lines.pop()!
+      for (const line of lines) {
+        if (line.startsWith('{"name"')) queue = queue.then(() => onResult(JSON.parse(line)))
+      }
+    })
+    proc.stderr!.on('data', (chunk: Buffer) => { errors = (errors + chunk.toString()).slice(-2000) })
+    proc.stdin!.on('error', () => {})
+    proc.on('error', (e) => {
+      if (prelabelJob === current) prelabelJob = null
+      reject(e)
+    })
+    proc.on('close', async (code, signal) => {
+      await queue
+      if (prelabelJob === current) prelabelJob = null
+      const crashed = code !== 0 && !current.stopped
+      const reason = errors.trim().split('\n').pop()
+      const error = crashed ? `Engine stopped (${signal ?? code})${reason ? `: ${reason}` : ''}` : undefined
+      if (crashed && !done) reject(new Error(error))
+      else resolve({ done, total: names.length, stopped: current.stopped || crashed, failed, error })
+    })
+    proc.stdin!.end(JSON.stringify(names))
+  })
+}
+
+function stopPrelabel() {
+  if (!prelabelJob?.proc.pid) return
+  prelabelJob.stopped = true
+  try {
+    process.kill(-prelabelJob.proc.pid, 'SIGTERM')
+  } catch {
+    // Already gone
+  }
+}
+
 function registerIpc() {
   ipcMain.handle('project:pick', async () => {
     const result = await dialog.showOpenDialog(win!, {
@@ -359,18 +500,14 @@ function registerIpc() {
     writeAtomic(meta('project.json'), JSON.stringify(project, null, 2))
   )
   ipcMain.handle('image:open', (_e, name: string) => openImage(name))
-  ipcMain.handle('labels:load', async (_e, name: string) => {
-    inProject(name)
-    return (await readJson(sidecar(name)))?.shapes ?? []
+  // Through the same queue as saves, so a load always sees the save sent before it
+  ipcMain.handle('labels:load', (_e, base: string, name: string) => {
+    const file = labelFile(base, name)
+    return serial(async () => (await readLabels(file))?.shapes ?? [])
   })
-  ipcMain.handle('labels:save', async (_e, name: string, shapes: any[], size: number[]) => {
-    inProject(name)
-    // LabelMe format, so LabelMeV2 opens the same files
-    const doc = (await readJson(sidecar(name))) ?? { version: '5.5.0', flags: {} }
-    Object.assign(doc, {
-      shapes, imagePath: name, imageData: null, imageWidth: size[0], imageHeight: size[1]
-    })
-    await writeAtomic(sidecar(name), JSON.stringify(doc, null, 2))
+  ipcMain.handle('labels:save', (_e, base: string, name: string, shapes: any[], size: number[]) => {
+    const file = labelFile(base, name)
+    return serial(() => writeLabels(file, name, shapes, size))
   })
   ipcMain.handle('runs:list', listRuns)
   ipcMain.handle('train:start', (_e, options, target) => launch(options, target))
@@ -380,9 +517,9 @@ function registerIpc() {
   ipcMain.handle('dataset:check', (_e, val: number, tile: number) =>
     engine(['prepare', root, '--val-split', String(val), '--tile', String(tile)])
   )
-  ipcMain.handle('model:predict', (_e, run: string, images: string[]) =>
-    engine(['predict', root, '--run', run, '--images', ...images])
-  )
+  ipcMain.handle('model:predict', (_e, runName: string, images: string[]) => predictOne(runName, images))
+  ipcMain.handle('prelabel:start', (_e, runName: string, names: string[]) => prelabelAll(runName, names))
+  ipcMain.handle('prelabel:stop', stopPrelabel)
 }
 
 app.whenReady().then(() => {
@@ -397,6 +534,20 @@ app.whenReady().then(() => {
     backgroundColor: '#14161a', autoHideMenuBar: true, title: 'mySeg Studio',
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: false }
   })
+  // Saves wait a moment after each change: let the last one reach the disk before closing
+  let flushed = false
+  win.on('close', (e) => {
+    if (flushed || !root) return
+    e.preventDefault()
+    const close = () => {
+      if (flushed) return
+      flushed = true
+      win?.close()
+    }
+    ipcMain.once('app:flushed', close)
+    setTimeout(close, 3000)
+    send('app:flush', null)
+  })
   if (process.env.ELECTRON_RENDERER_URL) win.loadURL(process.env.ELECTRON_RENDERER_URL)
   else {
     const project = process.env.MYSEG_PROJECT
@@ -407,5 +558,6 @@ app.whenReady().then(() => {
 // Local runs end with the app; remote ones keep going and reattach on next open
 app.on('window-all-closed', () => {
   stopLocal()
+  stopPrelabel()
   app.quit()
 })

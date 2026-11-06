@@ -11,9 +11,9 @@ contextBridge.exposeInMainWorld('api', {
   openProject: (dir: string) => ipc.invoke('project:open', dir),
   saveProject: (project: unknown) => ipc.invoke('project:save', project),
   openImage: (name: string) => ipc.invoke('image:open', name),
-  loadLabels: (name: string) => ipc.invoke('labels:load', name),
-  saveLabels: (name: string, shapes: unknown, size: number[]) =>
-    ipc.invoke('labels:save', name, shapes, size),
+  loadLabels: (root: string, name: string) => ipc.invoke('labels:load', root, name),
+  saveLabels: (root: string, name: string, shapes: unknown, size: number[]) =>
+    ipc.invoke('labels:save', root, name, shapes, size),
   listRuns: () => ipc.invoke('runs:list'),
   startTraining: (options: unknown, target: unknown) => ipc.invoke('train:start', options, target),
   checkRemote: (host: string, dir: string) => ipc.invoke('remote:check', host, dir),
@@ -21,6 +21,11 @@ contextBridge.exposeInMainWorld('api', {
   activeRun: () => ipc.invoke('train:active'),
   checkDataset: (val: number, tile: number) => ipc.invoke('dataset:check', val, tile),
   predict: (run: string, images: string[]) => ipc.invoke('model:predict', run, images),
+  prelabelAll: (run: string, names: string[]) => ipc.invoke('prelabel:start', run, names),
+  stopPrelabel: () => ipc.invoke('prelabel:stop'),
+  onPrelabel: on('prelabel:progress'),
+  onFlush: on('app:flush'),
+  flushed: () => ipc.send('app:flushed'),
   onLog: on('train:log'),
   onEvents: on('train:events'),
   onExit: on('train:exit')

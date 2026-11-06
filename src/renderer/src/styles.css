@@ -29,7 +29,17 @@ input, select { font: inherit; color: var(--text); background: var(--bg); border
 .seg button { display: flex; padding: 5px 9px; border-radius: 6px; color: var(--muted); }
 .seg button.on { background: var(--accent); color: #fff; }
 .seg.small button { flex: 1; justify-content: center; padding: 3px; text-transform: capitalize; }
-.seg.small button.on { background: var(--raised); }
+.seg.small button.on { background: var(--raised); color: var(--text); }
+.filters button { flex-direction: column; align-items: center; font-size: 11px; line-height: 1.25; text-transform: none !important; }
+.filters b { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.progress { display: flex; height: 4px; flex: none; border-radius: 2px; overflow: hidden; background: var(--raised); }
+.progress .done { background: var(--ok); }
+.progress .review { background: var(--warn); }
+.sort { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; flex: none; }
+.sort select { padding: 3px 6px; }
+.certainty { color: var(--warn); font-size: 12px; font-variant-numeric: tabular-nums; }
+.batch { position: relative; overflow: hidden; flex: none; }
+.batch i { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--accent); }
 .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); animation: pulse 1.4s infinite; }
 @keyframes pulse { 50% { opacity: .3; } }
 .ghost, .primary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 11px; border-radius: 7px; }
@@ -62,18 +72,27 @@ input, select { font: inherit; color: var(--text); background: var(--bg); border
 .dot { width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--muted); flex: none; }
 .dot.done { background: var(--ok); border-color: var(--ok); }
 .dot.ai { border-color: var(--warn); }
+.dot.broken { background: var(--danger); border-color: var(--danger); }
+.class { position: relative; }
+.class em { position: absolute; left: 8px; bottom: 1px; height: 2px; max-width: calc(100% - 16px); border-radius: 1px; opacity: .7; }
 .class i, .shape i, .legend i { width: 10px; height: 10px; border-radius: 3px; flex: none; display: inline-block; }
 kbd { font: 11px ui-monospace, monospace; color: var(--muted); background: var(--bg); padding: 0 5px; border-radius: 4px; }
 .tag { font-size: 10px; font-weight: 700; color: #1b1e23; background: var(--warn); padding: 0 4px; border-radius: 3px; }
 .add { display: flex; gap: 4px; margin-bottom: 12px; }
 .stage { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.toolbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .slider { display: flex; align-items: center; gap: 6px; color: var(--muted); margin-left: 8px; }
 .slider input { width: 80px; padding: 0; accent-color: var(--accent); }
 .canvas-wrap { flex: 1; min-height: 0; position: relative; }
 canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-canvas.tool-polygon, canvas.tool-rectangle { cursor: crosshair; }
+canvas.tool-polygon, canvas.tool-rectangle, canvas.tool-brush, canvas.tool-eraser { cursor: crosshair; }
 .loading { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); background: var(--raised); padding: 4px 12px; border-radius: 12px; }
+.notice { top: 46px; z-index: 1; }
+.review-bar { position: absolute; left: 8px; right: 8px; bottom: 12px; margin: auto; width: fit-content; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px;
+  padding: 6px 8px 6px 12px; white-space: nowrap; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 4px 16px #0007; }
+.review-bar > span { margin-right: 6px; }
+.review-bar .ghost { padding: 4px 8px; }
+.review-bar b { font-weight: 600; font-variant-numeric: tabular-nums; }
 .status { display: flex; gap: 16px; padding: 4px 12px; background: var(--panel); border-top: 1px solid var(--line); font-size: 12px; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
 .field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .row .field { flex: 1; }
