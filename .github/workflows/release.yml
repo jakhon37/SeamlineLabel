@@ -20,24 +20,31 @@ jobs:
             args: --win
           - os: macos-latest
             args: --mac --arm64
-          - os: macos-latest
+          # An Intel Mac, so sharp and onnxruntime install their Intel builds
+          - os: macos-26-intel
             args: --mac --x64
-            x64: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: sharp's Intel Mac libraries, to package for Intel on an Apple silicon runner
-        if: matrix.x64
-        run: npm install --no-save --os=darwin --cpu=x64 @img/sharp-darwin-x64 @img/sharp-libvips-darwin-x64
       - run: npx electron-vite build
       - run: npx electron-builder ${{ matrix.args }} --publish never
-      - uses: actions/upload-artifact@v4
+      # --version loads sharp and onnxruntime before it answers, so a package missing either fails here
+      - name: The packaged app starts
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux) app=release/linux-unpacked/seamline-label ;;
+            Windows) app="release/win-unpacked/Seamline Label.exe" ;;
+            macOS) app="$(ls -d release/mac*/'Seamline Label.app')/Contents/MacOS/Seamline Label" ;;
+          esac
+          "$app" --version
+      - uses: actions/upload-artifact@v7
         with:
-          name: installers-${{ matrix.os }}${{ matrix.x64 && '-x64' || '' }}
+          name: installers-${{ matrix.os }}
           path: |
             release/*.exe
             release/*.dmg
@@ -52,11 +59,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: installers
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           draft: true
           files: installers/*
