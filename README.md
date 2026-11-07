@@ -119,7 +119,7 @@ labelme's export scripts in [examples/](examples) (to VOC or COCO) work on these
 
 ## How it's built
 
-An Electron app in TypeScript. The main process reads and writes files, builds tile pyramids with libvips (through sharp), and runs ONNX models with onnxruntime, so no Python is needed. The window is React, drawing on a canvas; the LabelMe format lives in one shared module, [`src/shared/labelfile.ts`](src/shared/labelfile.ts). Unit tests (Vitest) cover the format, config, geometry and the resize; end-to-end tests (Playwright) drive the real app on Windows, macOS and Linux, each launch with its own home folder. Installers are built by electron-builder on each system.
+An Electron app in TypeScript. The main process reads and writes files, builds tile pyramids with libvips (through sharp), and runs ONNX models with onnxruntime, so no Python is needed. The window is React, drawing on a canvas; the LabelMe format lives in one shared module, [`src/shared/labelfile.ts`](src/shared/labelfile.ts). Unit tests (Vitest) cover the format, config, geometry and the resize; end-to-end tests (Playwright) drive the real app on Windows, macOS and Linux, each launch with a home folder and profile of its own. Installers are built by electron-builder on each system.
 
 ## History
 

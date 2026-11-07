@@ -34,15 +34,22 @@ export async function project(folder: string, files: Record<string, string | nul
 }
 
 /**
- * The app on a folder or file, with its own home folder, so a test never reads or writes
- * the settings, config or recent files of the person running it.
+ * The app on a folder or file, with its own home folder and profile, so a test never reads or
+ * writes the settings, config or recent files of the person running it.
  */
 export async function launch(target: string | null, extra: string[] = [], home?: string) {
   const own = home ?? mkdtempSync(path.join(tmpdir(), 'seamline-label-home-'))
+  // A home with the folders Windows expects in one
+  const roaming = path.join(own, 'AppData', 'Roaming'), local = path.join(own, 'AppData', 'Local')
+  mkdirSync(roaming, { recursive: true })
+  mkdirSync(local, { recursive: true })
   const headless = process.platform === 'linux' && !process.env.E2E_SHOW ? ['--ozone-platform=headless'] : []
   const app = await electron.launch({
     args: [path.resolve(__dirname, '..'), ...headless, ...(target ? [target] : []), ...extra],
-    env: { ...process.env, HOME: own, USERPROFILE: own, APPDATA: path.join(own, 'AppData'), XDG_CONFIG_HOME: path.join(own, '.config') } as Record<string, string>
+    env: {
+      ...process.env, HOME: own, USERPROFILE: own, APPDATA: roaming, LOCALAPPDATA: local, XDG_CONFIG_HOME: path.join(own, '.config'),
+      SEAMLINE_LABEL_USER_DATA: path.join(own, 'profile')
+    } as Record<string, string>
   })
   const page = await app.firstWindow()
   const errors: string[] = []
