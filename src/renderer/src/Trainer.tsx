@@ -65,6 +65,9 @@ export default function Trainer({ data, active, onError, onTraining }: Props) {
   const [running, setRunning] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const [log, setLog] = useState('')
+  const [saved, setSaved] = useState('')
+  // The run whose output is in `log`: any other run shows what it saved
+  const streamed = useRef<string | null>(null)
   const [check, setCheck] = useState<any>(null)
   const [checking, setChecking] = useState(false)
   const stored = (key: string, fallback: string) => {
@@ -83,7 +86,11 @@ export default function Trainer({ data, active, onError, onTraining }: Props) {
     setCurrent((c) => c ?? list[0]?.name ?? null)
   }
   // Asked rather than assumed: each folder mounts a new Trainer, and another run can outlast the one that ended
-  const syncRunning = () => window.api.activeRun().then((r) => { setRunning(r); onTraining(!!r) })
+  const syncRunning = () => window.api.activeRun().then((r) => {
+    if (r) streamed.current = r
+    setRunning(r)
+    onTraining(!!r)
+  })
 
   useEffect(() => {
     reload()
@@ -98,8 +105,16 @@ export default function Trainer({ data, active, onError, onTraining }: Props) {
   }, [])
   useEffect(() => { if (active) reload() /* eslint-disable-next-line */ }, [active])
   useEffect(() => {
+    setSaved('')
+    if (!current || current === streamed.current) return
+    let live = true
+    window.api.runLog(current).then((text) => { if (live) setSaved(cleanLog(text).slice(-20000)) }).catch(() => {})
+    return () => { live = false }
+  }, [current, running])
+  // A hidden panel can't scroll, so opening the tab counts as new text
+  useEffect(() => {
     logRef.current?.scrollTo(0, logRef.current.scrollHeight)
-  }, [log])
+  }, [log, saved, active])
 
   const runCheck = async () => {
     setChecking(true)
@@ -128,6 +143,7 @@ export default function Trainer({ data, active, onError, onTraining }: Props) {
       localStorage.setItem('trainHost', host)
       localStorage.setItem('trainDir', dir)
       const run = await window.api.startTraining(options, where === 'ssh' ? { host, dir } : null)
+      streamed.current = run
       setRunning(run)
       onTraining(true)
       setCurrent(run)
@@ -249,7 +265,7 @@ export default function Trainer({ data, active, onError, onTraining }: Props) {
         </div>
         <section className="card logs">
           <header><h3>Log</h3></header>
-          <pre ref={logRef} data-testid="log">{log || 'Output from the current session appears here.'}</pre>
+          <pre ref={logRef} data-testid="log">{saved || log || 'Output appears here once a run starts.'}</pre>
         </section>
       </main>
 

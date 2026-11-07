@@ -379,6 +379,18 @@ async function listRuns() {
   )
 }
 
+// What a finished run printed: a remote run's whole output, or else the training log every run keeps
+async function runLog(name: string) {
+  const dir = path.join(meta('runs'), path.basename(name))
+  const output = await fs.readFile(path.join(dir, 'out.log'), 'utf8').catch(() => null)
+  if (output !== null) return output
+  for (const sub of (await fs.readdir(dir).catch(() => [] as string[])).filter((f) => f.startsWith('run_'))) {
+    const logs = (await fs.readdir(path.join(dir, sub)).catch(() => [] as string[])).filter((f) => f.endsWith('.log'))
+    if (logs.length) return fs.readFile(path.join(dir, sub, logs[0]), 'utf8')
+  }
+  return ''
+}
+
 function send(channel: string, payload: unknown) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
 }
@@ -569,6 +581,7 @@ function registerIpc() {
     return serial(() => writeLabels(file, name, shapes, size))
   })
   ipcMain.handle('runs:list', listRuns)
+  ipcMain.handle('runs:log', (_e, name: string) => runLog(name))
   ipcMain.handle('train:start', (_e, options, target) => launch(options, target))
   ipcMain.handle('remote:check', (_e, host: string, dir: string) => checkRemote(host, dir))
   ipcMain.handle('train:stop', stopTraining)

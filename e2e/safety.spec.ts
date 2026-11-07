@@ -111,6 +111,29 @@ test('the brush previews in the colour it will paint', async () => {
   await finish(app)
 })
 
+test('a finished run shows what it printed, once the app has reopened', async () => {
+  const dir = await project('logs', { p: null })
+  const run = (name: string) => path.join(dir, '.myseg/runs', name)
+  for (const name of ['20260101_000000', '20260102_000000']) {
+    mkdirSync(run(name), { recursive: true })
+    writeFileSync(path.join(run(name), 'events.jsonl'), '{"type":"start","epochs":1,"device":"cpu"}\n')
+    writeFileSync(path.join(run(name), 'options.json'), '{"architecture":"Unet","encoder":"resnet18"}')
+  }
+  writeFileSync(path.join(run('20260102_000000'), 'out.log'), 'printed by the remote run\n'.repeat(200))
+  mkdirSync(path.join(run('20260101_000000'), 'run_1'))
+  writeFileSync(path.join(run('20260101_000000'), 'run_1/training_1.log'), 'written by the training log\n')
+  const { app, page } = await launch(dir)
+  await page.getByRole('tab', { name: /Train/ }).click()
+  const log = page.getByTestId('log')
+  await expect(log).toContainText('printed by the remote run')
+  // Read while its tab was still hidden, it opens at the end all the same
+  await expect.poll(() => log.evaluate((e) => e.scrollHeight - e.clientHeight - e.scrollTop)).toBeLessThan(2)
+  expect(await log.evaluate((e) => e.scrollTop)).toBeGreaterThan(0)
+  await page.locator('.run').nth(1).click()
+  await expect(log).toContainText('written by the training log')
+  await finish(app)
+})
+
 test('keys can\'t move a stroke onto another image', async () => {
   const dir = await project('stroke', { p: null, q: null })
   const { app, page } = await launch(dir)

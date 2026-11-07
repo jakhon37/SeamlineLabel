@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('api', {
   saveLabels: (root: string, name: string, shapes: unknown, size: number[]) =>
     ipc.invoke('labels:save', root, name, shapes, size),
   listRuns: () => ipc.invoke('runs:list'),
+  runLog: (name: string) => ipc.invoke('runs:log', name),
   startTraining: (options: unknown, target: unknown) => ipc.invoke('train:start', options, target),
   checkRemote: (host: string, dir: string) => ipc.invoke('remote:check', host, dir),
   stopTraining: () => ipc.invoke('train:stop'),

@@ -31,6 +31,7 @@ declare global {
       loadLabels(root: string, name: string): Promise<Shape[]>
       saveLabels(root: string, name: string, shapes: Shape[], size: number[]): Promise<void>
       listRuns(): Promise<Run[]>
+      runLog(name: string): Promise<string>
       startTraining(options: unknown, target: { host: string; dir: string } | null): Promise<string>
       checkRemote(host: string, dir: string): Promise<{ freeKb: number; gpu: string; gpuJobs: number; torch: string }>
       stopTraining(): Promise<void>
