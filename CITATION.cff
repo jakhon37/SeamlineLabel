@@ -1,10 +1,18 @@
 cff-version: 1.2.0
-message: "If you use this software, please cite it as below."
+message: "If you use this software, please cite it, and labelme, as below."
+title: "Seamline Label: image annotation in LabelMe format"
 authors:
-- family-names: "Wada"
-  given-names: "Kentaro"
-  orcid: "https://orcid.org/0000-0002-6347-5156"
-title: "Labelme: Image Polygonal Annotation with Python"
-doi: 10.5281/zenodo.5711226
-url: "https://github.com/wkentaro/labelme"
-license: GPL-3
+- family-names: "Nodirov"
+  given-names: "Jakhongir"
+version: 3.0.0
+url: "https://github.com/jakhon37/SeamlineLabel"
+license: GPL-3.0-only
+references:
+- type: software
+  title: "Labelme: Image Polygonal Annotation with Python"
+  authors:
+  - family-names: "Wada"
+    given-names: "Kentaro"
+    orcid: "https://orcid.org/0000-0002-6347-5156"
+  doi: 10.5281/zenodo.5711226
+  url: "https://github.com/wkentaro/labelme"

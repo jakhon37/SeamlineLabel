@@ -176,3 +176,4 @@ input.group { width: 110px; }
 .status .hint { overflow: hidden; text-overflow: ellipsis; }
 .recent { width: 420px; max-width: calc(100vw - 32px); text-align: left; margin-top: 12px; }
 .recent .file { color: var(--muted); }
+.slider select { width: auto; max-width: 170px; padding: 3px 6px; }

@@ -1,286 +1,132 @@
-# LabelMe V2
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/seamline-logo-on-dark.svg">
+    <img src="docs/brand/seamline-logo-on-light.svg" alt="Seamline" width="300">
+  </picture>
+</p>
 
-<div align="center">
-  <img src="labelme/icons/icon-256.png" width="200" height="200">
-  
-  ### Image Annotation Tool with Advanced Features & Performance Optimizations
-  
-  [![PyPI](https://img.shields.io/pypi/v/labelmev2.svg)](https://pypi.python.org/pypi/labelmev2)
-  [![Python Version](https://img.shields.io/pypi/pyversions/labelmev2.svg)](https://pypi.org/project/labelmev2/)
-  [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-  [![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-  
-  **Enhanced fork of [wkentaro/labelme](https://github.com/wkentaro/labelme) with up to 45x faster loading & productivity features**
-</div>
+<h1 align="center">Seamline Label</h1>
 
----
+<p align="center"><b>Label images in LabelMe format, with labelme's tools, a brush and eraser, AI segmentation, and review of a model's proposals. For Windows, macOS and Linux.</b></p>
 
-## 🎯 What's New in This Fork
+<p align="center">
+  <a href="https://github.com/jakhon37/SeamlineLabel/actions/workflows/ci.yml"><img src="https://github.com/jakhon37/SeamlineLabel/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0"></a>
+</p>
 
-This enhanced version adds powerful polygon editing features, **up to 45x faster image loading**, and improved defaults to speed up your annotation workflow:
+![Seamline Label editing a polygon on one of labelme's example photos](docs/media/label.webp)
 
-### ⚡ **Faster Loading: Up to 45x on Large Images**
+Seamline Label is the labelling half of [Seamline](https://github.com/jakhon37/Seamline), on its own. It reads and writes the same JSON files as [labelme](https://github.com/wkentaro/labelme), takes the same command line and config keys, and offers the same tools, so a folder labelled in either opens in the other. Everything runs on your computer: images, labels and AI models never leave it.
 
-The biggest improvement in this fork - **optimized TIFF/JPG/PNG loading** for massive images:
+## What it does
 
-| Image Size | Before | After | Speedup |
-|------------|--------|-------|---------|
-| 6050×12300 TIFF (71MB) | **10 seconds** | **220ms** | **45x faster** ⚡ |
-| Large JPG/PNG | 2-3 seconds | 200-400ms | **10x faster** |
-| Cached images | N/A | <200ms | Instant navigation |
+**labelme's tools.** Polygons, rectangles, circles, lines, line strips and points, drawn by labelme's rules: click the first point to close, Shift for a square, lines stop at the image edge. Edit labels with labelme's dialog (completion, flags per label pattern, group ID, description, and `--validatelabel exact`), tick image flags, hide or reorder shapes, copy and paste them between images, merge polygons, add and remove points (Alt+click, or `Ctrl+M` for several along an edge), keep the previous image's shapes, and adjust brightness and contrast. labelme 7's oriented rectangles and locked shapes open and save too.
 
-**How it works:**
-- ✅ Skip slow PIL conversion - load directly with Qt
-- ✅ Skip JSON base64 decode - load from file when possible
-- ✅ Smart image caching (3-image LRU cache)
-- ✅ Automatic downsampling for huge images
+**AI polygon and AI mask.** Click an object and SAM outlines it; Shift+click marks background. The models are the eight labelme 5 offers (EfficientSAM in two sizes, SAM and SAM2 in three), downloaded once from the addresses labelme uses and kept in the same cache, so a model labelme fetched is already here.
 
-**Perfect for:** Industrial inspection, PCB analysis, medical imaging, aerial photography
+![SAM2 outlining a bus from two clicks](docs/media/ai.webp)
 
----
+**Pre-label with your own model.** Point it at a segmentation model exported to ONNX, for example from Seamline, and it proposes shapes for every unlabelled image, each with a score. Proposals stay dashed until you accept them: `W` accepts, `S` rejects, `Tab` skips, and the list can put the least certain images first.
 
-### ✨ New Features
+**Brush and eraser.** Paint a class, and shapes of that class you touch join it. Erase from one shape or everything under the stroke, splitting shapes or cutting holes.
 
-#### 1. **Performance Optimizations** ⚡
-Smooth annotation even with massive images and many polygons.
+**Big images.** Large and TIFF images open from a tile pyramid that libvips builds once, so only the tiles in view load: a 6050 × 12300 TIFF opens again in under a second, and zoom goes to 5000%.
 
-- **Viewport Culling**: 5-10x faster rendering with 100+ polygons
-- **Adaptive Downsampling**: 4x less memory for large images (16000×8000)
-- **Optimized Loading**: 45x faster for large TIFF files
-- Configurable thresholds and quality settings
-- Works automatically - no manual intervention
+**Labels that are hard to lose.** Saves go through one queue to a temporary file and then into place. A label file that can't be read is shown read-only and never written over, and closing the window saves first, or asks when saving isn't automatic.
 
-**Example:** Annotate 16000×8000 PCB images with 500 polygons smoothly on 4GB RAM.
+![labelme's label dialog, with flags for the person label, a group ID and a description](docs/media/dialog.webp)
 
-#### 2. **Enhanced Zoom (Up to 5000%)**
-Maximum zoom increased from 1000% to 5000% (50x magnification) for tiny defect annotation.
+## Install
 
-- Configurable maximum zoom level
-- Adjustable zoom increment for smooth control
-- Perfect for PCB defects, microscopy, surface inspection
-- Mouse wheel zooms centered on cursor position
+Download the installer for your system from [Releases](https://github.com/jakhon37/SeamlineLabel/releases).
 
-**Example:** Annotate hairline cracks or solder bridges with pixel-level precision.
+| System | File | Notes |
+|---|---|---|
+| Windows 10 and 11 | `Seamline-Label-…-win-x64.exe` | Not code-signed yet: on the SmartScreen warning, choose More info, then Run anyway. |
+| macOS on Apple silicon | `Seamline-Label-…-mac-arm64.dmg` | Not notarised yet: right-click the app and choose Open the first time, or run `xattr -cr "/Applications/Seamline Label.app"`. |
+| macOS on Intel | `Seamline-Label-…-mac-x64.dmg` | As above. |
+| Linux | `Seamline-Label-…-linux-amd64.deb` | `sudo apt install ./Seamline-Label-*.deb` adds a `seamline-label` command. |
+| Linux, any distribution | `Seamline-Label-…-linux-x86_64.AppImage` | `chmod +x` it and run it. |
 
-#### 3. **Multiple Point Addition** (`Ctrl+M`)
-Quickly refine polygon boundaries by adding multiple evenly-spaced points along edges.
-
-- Hover over any polygon edge in edit mode
-- Press `Ctrl+M` and enter number of points (1-100)
-- Points are automatically distributed evenly
-- Perfect for curved edges or complex boundaries
-
-**Example:** Add 10 points to a curved car windshield edge in one action instead of clicking 10 times.
-
-#### 4. **Polygon Merge** (`Ctrl+Shift+M`)
-Merge multiple polygons into one or batch-apply labels to disconnected objects.
-
-- Select 2+ polygons (hold `Ctrl` while clicking)
-- Press `Ctrl+Shift+M` to merge
-- Smart handling:
-  - **Connected/overlapping** → Single merged polygon
-  - **Disconnected objects** → Multiple polygons with same label
-  - **Mixed** → Intelligent separation based on connectivity
-
-**Example:** Annotate 20 cars by drawing rough boxes, select all, merge once - all labeled "car" instantly.
-
-#### 5. **Dark Mode** (View → Dark Mode)
-Eye-friendly dark theme inspired by VS Code.
-
-- Toggle instantly via View menu
-- Persistent setting saved in config
-- Reduces eye strain during long sessions
-- Professional color scheme
-
-#### 6. **Improved Default Settings**
-Better defaults for faster annotation workflow:
-
-| Setting | Old Default | New Default | Why? |
-|---------|-------------|-------------|------|
-| `auto_save` | `false` | `true` | Never lose work |
-| `store_data` | `true` | `false` | Smaller JSON files |
-| `keep_prev_brightness_contrast` | `false` | `true` | Consistent visuals |
-| `dark_mode` | N/A | `true` | Eye comfort |
-| `canvas.fill_drawing` | `true` | `false` | See through shapes |
-| `canvas.num_backups` | 10 | 20 | More undo history |
-| `max_zoom` | 1000% | 5000% | 5x more zoom |
-
-#### 7. **Better Keyboard Shortcuts**
-More intuitive shortcuts that don't conflict:
-
-| Action | Old Shortcut | New Shortcut |
-|--------|--------------|--------------|
-| Create Polygon | `Ctrl+N` | `Ctrl+Shift+C` |
-| Create Rectangle | `Ctrl+R` | `Ctrl+Shift+X` |
-| Edit Polygon | `Ctrl+J` | `Ctrl+Shift+V` |
-
----
-
-## 📦 Installation
-
-### From PyPI (Recommended)
+To build it yourself you need Node 22:
 
 ```bash
-pip install labelmev2
+git clone https://github.com/jakhon37/SeamlineLabel.git
+cd SeamlineLabel
+npm ci
+npm run dev
 ```
 
-### From Source
+`npm run dist` builds the installer for the system you're on, into `release/`.
+
+## Use
+
+Open a folder of images: labels are saved beside each image as `name.json`, in labelme's format. Images in subfolders are listed too. The command line is labelme's:
 
 ```bash
-# Clone this enhanced version
-git clone https://github.com/jakhon37/LabelMeV2.git
-cd LabelMeV2
-
-# Install with pip
-pip install -e .
-
-# Or use uv (faster)
-uv pip install -e .
+seamline-label images/ --labels labels.txt --flags night,blurry --labelflags '{person: [occluded]}' -O labels/
 ```
 
----
+| Option | |
+|---|---|
+| `--labels LIST\|FILE` | Labels to offer, comma separated or one per line in a file |
+| `--flags LIST\|FILE` | Flags for each image |
+| `--labelflags YAML\|FILE` | Flags for shapes whose label matches a pattern |
+| `--validatelabel exact` | Only allow listed labels |
+| `-O`, `--output DIR\|FILE.json` | Save label files somewhere else |
+| `--nodata`, `--autosave`, `--keep-prev`, `--nosortlabels`, `--epsilon N` | As in labelme |
+| `--config FILE\|YAML` | A config file, such as your `~/.labelmerc`, or YAML overrides |
 
-## 🚀 Quick Start
+Settings live in `~/.seamline-labelrc`, which takes labelme's keys, so a `~/.labelmerc` can be copied in as it is. File → Open config file opens it. [docs/config.md](docs/config.md) lists every key, including the shortcuts.
 
-```bash
-# Launch labelme
-labelme
+### Keys
 
-# Enable dark mode (if not already on)
-View → Dark Mode
+| Key | Action |
+|---|---|
+| `P` `R` `V` | Polygon, rectangle, edit (labelme's `Ctrl+Shift+V`, `Ctrl+Shift+B` and `Ctrl+Shift+C` work too) |
+| `B` `E`, `[` `]` | Brush, eraser, smaller and larger |
+| `1`-`9` | Pick a label, or relabel the selected shapes |
+| `A` `D` | Previous and next image; with `Ctrl+Shift`, copy this image's shapes over |
+| `W` `S` `Tab`, `Shift+W` | Accept, reject or skip an AI proposal; accept all here and move on |
+| `Enter`, double-click | Finish a polygon, line strip or AI shape |
+| `Alt`+click | Add a point on an edge, or remove one |
+| `Ctrl+M`, `Ctrl+Shift+M` | Add several points along an edge; merge selected polygons |
+| `Ctrl+Z`, `Ctrl+Shift+Z` | Undo (a point while drawing), redo |
+| Wheel, `Space`+drag, `0` | Zoom, pan, fit |
 
-# Try the new features:
-# 1. Draw a polygon
-# 2. Press Ctrl+Shift+V to enter edit mode
-# 3. Hover over an edge and press Ctrl+M
-# 4. Enter "5" to add 5 points
-# 5. Adjust the points as needed
+Help → Keyboard shortcuts lists them all.
+
+### Pre-labelling models
+
+Any ONNX model that takes an image as `[1, 3, H, W]` and returns scores per class as `[1, C, H, W]`, with background as class 0, works. A JSON file beside it with the same name says how to use it; every key is optional:
+
+```json
+{ "classes": ["scratch", "dent"], "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225], "tile": 1024 }
 ```
 
-### New Feature Quick Reference
+Without `classes`, the label list names the classes, in order. Images bigger than `tile` go through tile by tile, and each shape's score is the model's mean confidence inside it, useful for ranking rather than as a probability.
 
-| Feature | Shortcut | Usage |
-|---------|----------|-------|
-| **High Zoom (5000%)** | Mouse wheel | Scroll on image to zoom up to 50x magnification |
-| **Add Multiple Points** | `Ctrl+M` | Edit mode → Hover edge → Ctrl+M → Enter count |
-| **Merge Polygons** | `Ctrl+Shift+M` | Select multiple → Ctrl+Shift+M |
-| **Dark Mode** | View menu | View → Dark Mode (toggles instantly) |
-| **Edit Mode** | `Ctrl+Shift+V` | Enter polygon editing mode |
+## Working with labelme
 
----
+The point is that files go both ways, so it's tested from both sides:
 
-## 📚 Documentation
+- Saving a file that labelme 5 wrote gives back the same bytes, including Python's float format and key order.
+- Every `.json` in labelme's examples and test data opens.
+- In CI, labelme 7.9.1 and 5.8.1 load the files this app writes with each drawing tool and turn every shape into pixels with `shapes_to_label`, as labelme's export scripts do. AI mask shapes pass the same check with a downloaded model.
+- On the test photo, AI masks are the same as osam's, pixel for pixel, for EfficientSAM and SAM2. That needed Pillow's bilinear resize ported exactly, which a test checks against Pillow.
 
-- **New Features Guide**: [docs/NEW_FEATURES.md](docs/NEW_FEATURES.md)
-- **Contributing**: [CONTRIBUTING.md](CONTRIBUTING.md)
-- **Original Documentation**: See [wkentaro/labelme](https://github.com/wkentaro/labelme) for:
-  - Basic usage and examples
-  - Export formats (VOC, COCO)
-  - AI-assisted annotation
-  - Command-line tools
-  - Video annotation
-  - Classification/segmentation workflows
+labelme's export scripts in [examples/](examples) (to VOC or COCO) work on these files with `pip install labelme`.
 
----
+## How it's built
 
-## 🎬 Examples
+An Electron app in TypeScript. The main process reads and writes files, builds tile pyramids with libvips (through sharp), and runs ONNX models with onnxruntime, so no Python is needed. The window is React, drawing on a canvas; the LabelMe format lives in one shared module, [`src/shared/labelfile.ts`](src/shared/labelfile.ts). Unit tests (Vitest) cover the format, config, geometry and the resize; end-to-end tests (Playwright) drive the real app on Windows, macOS and Linux, each launch with its own home folder. Installers are built by electron-builder on each system.
 
-### Polygon Refinement Workflow
-```
-1. Draw rough polygon around object
-2. Ctrl+Shift+V (edit mode)
-3. Hover over curved edge
-4. Ctrl+M → Enter "8" → OK
-5. Adjust 8 new points to match boundary perfectly
-```
+## History
 
-### Batch Labeling Workflow
-```
-1. Draw boxes around 15 cars (quick rough boxes)
-2. Ctrl+Click each box to select all
-3. Ctrl+Shift+M (merge)
-4. Result: 15 separate polygons all labeled "car"
-```
+This repository continues [LabelMeV2](https://github.com/jakhon37/LabelMeV2), a fork of labelme that made big images load faster and added 5000% zoom, points along an edge, polygon merge and dark mode: those are its first 29 commits. The labeller of Seamline's desktop app joined with its own history in [`6204364`](https://github.com/jakhon37/SeamlineLabel/commit/6204364), so its files keep their commits, and replaced the Qt app in [`c2cc715`](https://github.com/jakhon37/SeamlineLabel/commit/c2cc715). Version 3.0 is the first on the new stack; [CHANGELOG.md](CHANGELOG.md) has the rest.
 
----
+## License
 
-## 🔧 Configuration
+GPL-3.0, as labelme. The AI models are downloaded from their authors' releases under their own licences: SAM, SAM2 and EfficientSAM are Apache-2.0.
 
-Enhanced defaults in `~/.labelmerc`:
-
-```yaml
-# New/modified defaults
-auto_save: true
-dark_mode: true
-store_data: false
-keep_prev_brightness_contrast: true
-
-# Zoom settings
-zoom_increment: 1.45  # 45% per step (ultra fast for quick navigation)
-max_zoom: 5000        # 5000% = 50x magnification
-
-# New features config
-default_num_points_to_add: 1
-
-shortcuts:
-  add_multiple_points: Ctrl+M
-  merge_polygons: Ctrl+Shift+M
-  create_polygon: Ctrl+Shift+C
-  create_rectangle: Ctrl+Shift+X
-  edit_polygon: Ctrl+Shift+V
-```
-
----
-
-## 🤝 Contributing
-
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for:
-- Development setup
-- Code style guidelines
-- Testing procedures
-- Feature implementation details
-
----
-
-## 📄 License
-
-GPL-3.0-only - Same as original [wkentaro/labelme](https://github.com/wkentaro/labelme)
-
----
-
-## 🙏 Acknowledgments & Credits
-
-**This project is based on [wkentaro/labelme](https://github.com/wkentaro/labelme)**
-
-- **Original Author**: [Kentaro Wada](https://github.com/wkentaro)
-- **Original Repository**: https://github.com/wkentaro/labelme
-- **License**: GPL-3.0 (maintained in this fork)
-
-This enhanced version builds upon the excellent foundation of the original labelme, adding:
-
-**Performance Enhancements by Jakhongir Nodirov:**
-- ⚡ 45x faster image loading for large TIFF/JPG/PNG files
-- 🖼️ Smart image caching with LRU eviction
-- 🎨 Viewport culling for smooth rendering with hundreds of polygons
-- 📊 Optimized memory usage for massive images
-
-**New Features:**
-- 🔍 Enhanced zoom up to 5000% for tiny defect inspection
-- ➕ Multiple point addition (Ctrl+M) for quick polygon refinement
-- 🔗 Polygon merge (Ctrl+Shift+M) for batch labeling
-- 🌙 Dark mode for comfortable annotation sessions
-- ⚙️ Improved default settings for faster workflows
-
-**Maintained by**: [Jakhongir Nodirov](https://github.com/jakhon37) (jakhon37@gmail.com)
-
-For the complete original labelme documentation and features, please visit the [official repository](https://github.com/wkentaro/labelme).
-
----
-
-## ⭐ Support
-
-If you find these enhancements useful:
-- ⭐ Star this repository
-- 🐛 Report issues on [GitHub Issues](https://github.com/jakhon37/LabelMeV2/issues)
-- 💬 Share feedback and suggestions
-- ⭐ Also star the [original labelme](https://github.com/wkentaro/labelme) project!
+Thanks to Kentaro Wada for [labelme](https://github.com/wkentaro/labelme) and [osam](https://github.com/wkentaro/osam).

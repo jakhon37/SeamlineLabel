@@ -4,7 +4,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.0.x   | :white_check_mark: |
+| 3.x     | :white_check_mark: |
+| < 3.0 (LabelMeV2, Qt) | :x: |
 
 ## Reporting a Vulnerability
 
@@ -13,7 +14,7 @@ If you discover a security vulnerability in this project, please report it respo
 ### How to Report
 
 1. **Do NOT** open a public GitHub issue
-2. Email the maintainers directly (see repository owners)
+2. Use GitHub's private vulnerability reporting on this repository (Security → Report a vulnerability)
 3. Provide detailed information:
    - Description of the vulnerability
    - Steps to reproduce
