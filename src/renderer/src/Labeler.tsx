@@ -213,6 +213,9 @@ export default function Labeler({ data, setProject, setImages, active, onError }
       })
     }
     const current = opts.current.classes[opts.current.activeClass]?.color ?? '#fff'
+    // The brush continues a selected shape's class, so it previews in that colour
+    const chosen = selectedRef.current === null ? undefined : shapesRef.current[selectedRef.current]
+    const brushColor = chosen ? colorOf(chosen.label) : current
     const d = drag.current
     if (d?.kind === 'rect') {
       const [a, b] = toScreen(d.start), [c, e] = toScreen(d.end)
@@ -229,7 +232,7 @@ export default function Labeler({ data, setProject, setImages, active, onError }
       ctx.lineJoin = 'round'
       ctx.lineWidth = d.radius * 2 * scale
       ctx.globalAlpha = 0.55
-      ctx.strokeStyle = erasing ? '#fff' : current
+      ctx.strokeStyle = erasing ? '#fff' : brushColor
       ctx.stroke()
       ctx.globalAlpha = 1
       ctx.lineCap = 'butt'
@@ -238,7 +241,7 @@ export default function Labeler({ data, setProject, setImages, active, onError }
     if ((erasing || opts.current.tool === 'brush') && overCanvas.current) {
       ctx.beginPath()
       ctx.arc(...toScreen(mouse.current), opts.current.brushSize / 2, 0, 7)
-      ctx.strokeStyle = erasing ? '#fff' : current
+      ctx.strokeStyle = erasing ? '#fff' : brushColor
       ctx.lineWidth = 1.5
       ctx.stroke()
     }

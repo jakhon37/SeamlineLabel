@@ -84,6 +84,33 @@ test('a label file that can\'t be read is shown as such and never written over',
   await finish(app)
 })
 
+test('the brush previews in the colour it will paint', async () => {
+  const dir = await project('preview', { p: doc('p', [{ ...square(50, 50, 120, 120), label: 'dog' }]) })
+  writeFileSync(path.join(dir, '.myseg/project.json'), JSON.stringify({
+    name: 'preview', classes: [{ name: 'cat', color: '#4f8cff' }, { name: 'dog', color: '#ff6b6b' }]
+  }))
+  const { app, page } = await launch(dir)
+  await open(page, 'p')
+  // Cat stays the active class; selecting the shape means the brush continues its class, dog
+  await page.locator('.shape').first().click()
+  await page.keyboard.press('b')
+  await page.mouse.move(...await onImage(page, 200, 200))
+  await page.mouse.down()
+  await page.mouse.move(...await onImage(page, 320, 200), { steps: 8 })
+  await page.waitForTimeout(200)
+  const [x, y] = await onImage(page, 260, 200)
+  const [red, , blue] = await page.getByTestId('canvas').evaluate((c: HTMLCanvasElement, [cssX, cssY]) => {
+    const box = c.getBoundingClientRect()
+    const at = [(cssX - box.left) * (c.width / box.width), (cssY - box.top) * (c.height / box.height)]
+    return [...c.getContext('2d')!.getImageData(at[0], at[1], 1, 1).data]
+  }, [x, y])
+  expect(red).toBeGreaterThan(blue)
+  await page.mouse.up()
+  await expect.poll(() => shapesIn(dir, 'p').map((s: any) => s.label).join()).toContain('dog')
+  expect(shapesIn(dir, 'p').every((s: any) => s.label === 'dog')).toBe(true)
+  await finish(app)
+})
+
 test('keys can\'t move a stroke onto another image', async () => {
   const dir = await project('stroke', { p: null, q: null })
   const { app, page } = await launch(dir)
