@@ -65,6 +65,11 @@ jobs:
         run: xvfb-run -a npx playwright test e2e/labelme.spec.ts e2e/ai.spec.ts --reporter=line
         env:
           E2E_DIR: ${{ runner.temp }}/e2e
+      # labelme 7 loads Qt's GUI module, which needs GL libraries the runner image leaves out
+      - name: Libraries for Qt
+        run: |
+          sudo apt-get update -q > /dev/null
+          sudo apt-get install -y -q libegl1 libgl1 libxkbcommon0 libfontconfig1 > /dev/null
       - name: Load them with labelme 7 and labelme 5
         shell: bash
         run: |

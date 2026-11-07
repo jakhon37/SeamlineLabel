@@ -112,7 +112,7 @@ The point is that files go both ways, so it's tested from both sides:
 
 - Saving a file that labelme 5 wrote gives back the same bytes, including Python's float format and key order.
 - Every `.json` in labelme's examples and test data opens.
-- In CI, labelme 7.9.1 and 5.8.1 load the files this app writes with each drawing tool and turn every shape into pixels with `shapes_to_label`, as labelme's export scripts do. AI mask shapes pass the same check with a downloaded model.
+- In CI, labelme 7.9.1 and 5.8.1 load the files this app writes with each drawing tool and turn every shape into pixels with `shapes_to_label`, as labelme's export scripts do. CI has no SAM models; run locally with one, AI mask shapes pass the same check.
 - On the test photo, AI masks are the same as osam's, pixel for pixel, for EfficientSAM and SAM2. That needed Pillow's bilinear resize ported exactly, which a test checks against Pillow.
 
 labelme's export scripts in [examples/](examples) (to VOC or COCO) work on these files with `pip install labelme`.
