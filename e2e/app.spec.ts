@@ -76,6 +76,8 @@ test('label, switch, train, pre-label', async () => {
 
   // Switch to Train with the shortcut and run real training on CPU
   await page.keyboard.press('Control+2')
+  // Set here, as the app remembers the last choice between runs
+  await page.getByLabel('Run on').selectOption('local')
   await page.getByLabel('Epochs').fill('3')
   await page.getByLabel('Batch').fill('4')
   await page.getByLabel('Input size').fill('128')

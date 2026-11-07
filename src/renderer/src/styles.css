@@ -7,6 +7,9 @@
 [hidden] { display: none !important; }
 html, body, #root { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--text); font: 13px/1.45 Inter, system-ui, sans-serif; overflow: hidden; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #363c46; border: 2px solid transparent; background-clip: padding-box; border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background-color: #4a515c; }
 h1 { font-size: 22px; font-weight: 600; margin: 0; }
 h3 { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); font-weight: 600;
   margin: 0 0 8px; display: flex; align-items: center; justify-content: space-between; }
@@ -118,9 +121,9 @@ canvas.tool-polygon, canvas.tool-rectangle, canvas.tool-brush, canvas.tool-erase
 .legend i { margin-right: 4px; }
 .legend b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .chart svg { width: 100%; display: block; }
-.chart text { fill: var(--muted); font-size: 11px; }
+.chart text { fill: var(--muted); font-size: 13px; }
 .chart .grid { stroke: var(--line); }
 .logs { flex: 1; min-height: 140px; display: flex; flex-direction: column; }
-.logs pre { flex: 1; margin: 0; min-height: 0; overflow: auto; font: 11.5px/1.5 ui-monospace, monospace; color: var(--muted); white-space: pre-wrap; max-height: 300px; }
+.logs pre { flex: 1; margin: 0; min-height: 0; overflow: auto; font: 11.5px/1.5 ui-monospace, monospace; color: var(--muted); white-space: pre-wrap; }
 .run { display: flex; flex-direction: column; padding: 7px 8px; border-radius: 6px; text-align: left; flex: none; }
 .run .muted { font-size: 12px; }

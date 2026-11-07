@@ -13,7 +13,8 @@ function Chart({ title, series, max }: { title: string; series: Series[]; max?: 
   const W = 600, H = 200, L = 40, B = 20, T = 8
   const all = series.flatMap((s) => s.values)
   const top = max ?? Math.max(...all, 1e-6) * 1.1
-  const n = Math.max(...series.map((s) => s.values.length), 2)
+  const count = Math.max(...series.map((s) => s.values.length))
+  const n = Math.max(count, 2)
   const px = (i: number) => L + (i / (n - 1)) * (W - L - 8)
   const py = (v: number) => T + (1 - Math.min(v, top) / top) * (H - T - B)
   return (
@@ -31,10 +32,12 @@ function Chart({ title, series, max }: { title: string; series: Series[]; max?: 
         {[0, 0.5, 1].map((f) => (
           <g key={f}>
             <line x1={L} x2={W - 8} y1={py(top * f)} y2={py(top * f)} className="grid" />
-            <text x={L - 6} y={py(top * f) + 4} textAnchor="end">{(top * f).toFixed(2)}</text>
+            {count > 0 && <text x={L - 6} y={py(top * f) + 4} textAnchor="end">{(top * f).toFixed(2)}</text>}
           </g>
         ))}
-        <text x={W - 8} y={H - 4} textAnchor="end">epoch {n}</text>
+        {count > 0
+          ? <text x={W - 8} y={H - 4} textAnchor="end">epoch {count}</text>
+          : <text x={(L + W - 8) / 2} y={py(top * 0.5) - 8} textAnchor="middle">No epochs yet</text>}
         {series.map((s) => (
           <g key={s.name}>
             <polyline fill="none" stroke={s.color} strokeWidth={2}
@@ -58,7 +61,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 export default function Trainer({ data, active, onError, onTraining }: Props) {
   const [options, setOptions] = useState({
     architecture: 'Unet', encoder: 'resnet34', encoder_weights: 'imagenet', loss: 'combined',
-    epochs: 30, batch_size: 8, image_size: 512, learning_rate: 0.0001, val_split: 0.2, tile: 1024, num_workers: 2
+    epochs: 30, batch_size: 8, image_size: 512, learning_rate: 0.0001, val_split: 0.2, tile: 1024, num_workers: 4
   })
   const [runs, setRuns] = useState<Run[]>([])
   const [current, setCurrent] = useState<string | null>(null)
@@ -130,7 +133,9 @@ export default function Trainer({ data, active, onError, onTraining }: Props) {
     setRemote('Connecting…')
     try {
       const r = await window.api.checkRemote(host, dir)
-      setRemote(`${r.gpu || 'No GPU found'} · ${r.gpuJobs} GPU jobs · ${(r.freeKb / 1048576).toFixed(1)} GB free`)
+      const [name, free, total] = r.gpu.split(', ').map((part) => part.trim())
+      const memory = total ? ` · ${(parseInt(free) / 1024).toFixed(1)} of ${(parseInt(total) / 1024).toFixed(1)} GB memory free` : ''
+      setRemote(`${name || 'No GPU found'}${memory} · ${r.gpuJobs} GPU jobs · ${(r.freeKb / 1048576).toFixed(1)} GB free on disk`)
     } catch (e: any) {
       setRemote(`Failed: ${e.message}`)
     }
@@ -246,7 +251,7 @@ export default function Trainer({ data, active, onError, onTraining }: Props) {
       <main className="results">
         <div className="tiles">
           <div className="tile"><span>Status</span>
-            <b>{failure ? 'Failed' : isRunning ? 'Training' : events.some((e) => e.type === 'done') ? 'Finished' : selected ? 'Stopped' : 'No runs yet'}</b></div>
+            <b>{failure ? 'Failed' : isRunning ? 'Training' : events.some((e) => e.type === 'done') ? 'Finished' : selected ? 'Stopped' : '–'}</b></div>
           <div className="tile"><span>Epoch</span><b>{last ? `${last.epoch + 1} / ${last.epochs}` : '–'}</b></div>
           <div className="tile"><span>Best IoU</span><b>{best ? best.iou.toFixed(3) : '–'}</b></div>
           <div className="tile"><span>Device</span><b className="fit" data-testid="device">{events.find((e) => e.type === 'start')?.device ?? '–'}</b></div>
