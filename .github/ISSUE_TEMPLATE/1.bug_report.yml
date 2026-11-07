@@ -5,13 +5,10 @@ body:
   - type: markdown
     attributes:
       value: Thanks for taking the time to file a bug report! Please fill out this form as completely as possible.
-  - type: markdown
+  - type: input
     attributes:
-      value: If you leave out sections there is a high likelihood it will be moved to the GitHub Discussions ["Q&A / Help" section](https://github.com/wkentaro/labelme/discussions/categories/q-a-help).
-  - type: textarea
-    attributes:
-      label: Provide environment information
-      description: Please run `which python; python --version; python -m pip list | grep labelme` in the root directory of your project and paste the results.
+      label: Seamline Label version
+      description: Help → About, or `seamline-label --version`, and how you installed it (installer, AppImage, .deb, from source).
     validations:
       required: true
   - type: input

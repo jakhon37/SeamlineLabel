@@ -84,9 +84,9 @@ test('review AI shapes, then fix shapes with the brush and eraser', async () => 
   expect(kept.score).toBeUndefined()
 
   // Undo takes the acceptance back
-  await page.keyboard.press('Control+z')
+  await page.keyboard.press('ControlOrMeta+z')
   await expect(page.locator('.tag')).toHaveCount(2)
-  await page.keyboard.press('Control+Shift+z')
+  await page.keyboard.press('ControlOrMeta+Shift+z')
   await expect(page.locator('.tag')).toHaveCount(1)
 
   // Reject the last one here: the next image opens on its least certain shape
@@ -97,7 +97,7 @@ test('review AI shapes, then fix shapes with the brush and eraser', async () => 
   await expect.poll(() => read('a').length).toBe(1)
 
   // A mistake on the last shape can still be undone from the next image
-  await page.keyboard.press('Control+z')
+  await page.keyboard.press('ControlOrMeta+z')
   await expect(page.locator('.file.on')).toContainText('a.png')
   await expect(page.locator('.shape.on')).toContainText('AI 90%')
   await expect.poll(() => read('a').length).toBe(2)
@@ -130,9 +130,9 @@ test('review AI shapes, then fix shapes with the brush and eraser', async () => 
   expect(label('e', 160, 150)).toBe('cat')
   expect(label('e', 350, 50)).toBe('dog')
   await page.screenshot({ path: `${SHOTS}/brush.png` })
-  await page.keyboard.press('Control+z')
+  await page.keyboard.press('ControlOrMeta+z')
   await expect(page.locator('.shape')).toHaveCount(3)
-  await page.keyboard.press('Control+Shift+z')
+  await page.keyboard.press('ControlOrMeta+Shift+z')
   await expect(page.locator('.shape')).toHaveCount(2)
 
   // Eraser across the joined shape splits it in two

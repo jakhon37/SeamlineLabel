@@ -750,7 +750,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   }, [])
   useEffect(() => window.api.onPrelabel(({ root: at, name, shapes: found, done, total }) => {
     if (at !== root) return
-    setBatch({ done, total })
+    setBatch(done >= total ? null : { done, total })
     if (!found) return
     history.current.delete(name)
     if (name === loadedName.current) {

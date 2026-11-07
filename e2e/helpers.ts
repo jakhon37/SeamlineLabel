@@ -42,7 +42,7 @@ export async function launch(target: string | null, extra: string[] = [], home?:
   const headless = process.platform === 'linux' && !process.env.E2E_SHOW ? ['--ozone-platform=headless'] : []
   const app = await electron.launch({
     args: [path.resolve(__dirname, '..'), ...headless, ...(target ? [target] : []), ...extra],
-    env: { ...process.env, HOME: own, USERPROFILE: own, XDG_CONFIG_HOME: path.join(own, '.config') } as Record<string, string>
+    env: { ...process.env, HOME: own, USERPROFILE: own, APPDATA: path.join(own, 'AppData'), XDG_CONFIG_HOME: path.join(own, '.config') } as Record<string, string>
   })
   const page = await app.firstWindow()
   const errors: string[] = []

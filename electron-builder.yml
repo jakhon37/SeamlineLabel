@@ -1,0 +1,56 @@
+# Installers for Windows, macOS and Linux. Each is built on its own system in CI
+# (.github/workflows/release.yml); `npm run dist` builds the one for this computer.
+appId: io.github.jakhon37.seamlinelabel
+productName: Seamline Label
+executableName: seamline-label
+copyright: Copyright © 2026 Jakhongir Nodirov
+artifactName: Seamline-Label-${version}-${os}-${arch}.${ext}
+directories:
+  output: release
+  buildResources: resources
+files:
+  - out/**
+  - package.json
+  - "!**/*.map"
+  # onnxruntime ships every platform's libraries: keep this one's, without CUDA
+  - "!node_modules/onnxruntime-node/bin/**"
+  - node_modules/onnxruntime-node/bin/napi-v6/${platform}/${arch}/**
+  - "!node_modules/onnxruntime-node/bin/napi-v6/linux/*/libonnxruntime_providers_cuda.so"
+  - "!node_modules/onnxruntime-node/bin/napi-v6/linux/*/libonnxruntime_providers_tensorrt.so"
+asarUnpack:
+  - node_modules/sharp/**
+  - node_modules/@img/**
+  - node_modules/onnxruntime-node/**
+# sharp and onnxruntime come prebuilt for Node-API: nothing to compile
+npmRebuild: false
+extraMetadata:
+  main: out/main/index.js
+fileAssociations: []
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: Seamline Label
+mac:
+  category: public.app-category.graphics-design
+  target:
+    - target: dmg
+  # Ad-hoc signed, so it runs on Apple silicon; not notarised (see the README)
+  identity: "-"
+  hardenedRuntime: false
+linux:
+  category: Graphics
+  synopsis: Image labelling in LabelMe format
+  description: Label images with polygons, boxes, brush and eraser, AI segmentation and review of model proposals. Saves LabelMe JSON.
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  maintainer: Jakhongir Nodirov <jakhon37@gmail.com>
+deb:
+  depends: [libgtk-3-0, libnotify4, libnss3, libxss1, libxtst6, xdg-utils, libatspi2.0-0, libuuid1, libsecret-1-0]
