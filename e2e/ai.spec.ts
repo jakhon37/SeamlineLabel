@@ -1,0 +1,119 @@
+import { expect, test } from '@playwright/test'
+import { existsSync, writeFileSync } from 'fs'
+import path from 'path'
+import sharp from 'sharp'
+import { click, doc, finish, launch, open, project, saved, shapesIn, square, W, H } from './helpers'
+
+const MODEL = path.resolve(__dirname, '../tests/fixtures/models/discs.onnx')
+
+// A grey image with a red and a blue disc, as the test model knows them
+async function discs(dir: string, name: string, items: { cx: number; cy: number; r: number; color: string }[]) {
+  const svg = `<svg width="${W}" height="${H}">${items.map((d) => `<circle cx="${d.cx}" cy="${d.cy}" r="${d.r}" fill="${d.color}"/>`).join('')}</svg>`
+  await sharp({ create: { width: W, height: H, channels: 3, background: '#707478' } })
+    .composite([{ input: Buffer.from(svg) }]).png().toFile(path.join(dir, `${name}.png`))
+}
+
+test('pre-label with a segmentation model, then review what it proposed', async () => {
+  const dir = await project('prelabel', { done: doc('done', [square('red', 10, 10, 50, 50)]) })
+  await discs(dir, 'p1', [{ cx: 100, cy: 100, r: 40, color: '#ff0000' }, { cx: 280, cy: 180, r: 50, color: '#0000ff' }])
+  await discs(dir, 'p2', [{ cx: 200, cy: 150, r: 60, color: '#ff0000' }])
+  const { app, page, errors } = await launch(dir, ['--labels', 'red,blue'])
+  // The file dialog answers with the test model
+  await app.evaluate(({ dialog }, model) => {
+    dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [model] })) as any
+  }, MODEL)
+  // Images someone labelled are left alone
+  await page.getByRole('button', { name: 'Pre-label 2 images' }).click()
+  await expect(page.locator('.loading.notice')).toContainText('Pre-labelled 2 of 2 images')
+  const p1 = shapesIn(dir, 'p1')
+  expect(p1.map((s: any) => s.label).sort()).toEqual(['blue', 'red'])
+  for (const s of p1) {
+    expect(s.flags.ai).toBe(true)
+    expect(s.score).toBeGreaterThan(0.5)
+    expect(s.score).toBeLessThanOrEqual(1)
+  }
+  const red = p1.find((s: any) => s.label === 'red')
+  const xs = red.points.map((p: number[]) => p[0]), ys = red.points.map((p: number[]) => p[1])
+  expect(Math.min(...xs)).toBeGreaterThan(55)
+  expect(Math.max(...xs)).toBeLessThan(145)
+  expect(Math.min(...ys)).toBeGreaterThan(55)
+  expect(Math.max(...ys)).toBeLessThan(145)
+  expect(shapesIn(dir, 'done')).toHaveLength(1)
+  const filter = (name: string) => page.locator('.filters button', { hasText: name })
+  await expect(filter('Review')).toContainText('2')
+
+  // Review: W goes to the least certain shape, W again accepts it
+  await open(page, 'p1.png')
+  await page.keyboard.press('w')
+  await expect(page.getByTestId('review-bar')).toContainText('this one')
+  await page.keyboard.press('w')
+  await saved(page)
+  await expect.poll(() => shapesIn(dir, 'p1').filter((s: any) => !s.flags.ai).length).toBe(1)
+  await page.keyboard.press('s')
+  await expect(page.locator('.file.on')).toContainText('p2.png')
+  await expect.poll(() => shapesIn(dir, 'p1').length).toBe(1)
+  // Pre-label just this image again, from the toolbar
+  await open(page, 'p1.png')
+  await expect(page.getByRole('button', { name: 'Pre-label 1 image' })).toBeVisible()
+  await finish(app, errors)
+})
+
+test("a model's classes must match its outputs", async () => {
+  const dir = await project('prelabel-bad', {})
+  await discs(dir, 'q', [{ cx: 100, cy: 100, r: 40, color: '#ff0000' }])
+  const side = path.join(dir, 'three.json')
+  writeFileSync(side, JSON.stringify({ classes: ['a', 'b', 'c'], mean: [0, 0, 0], std: [1, 1, 1] }))
+  const { app, page, errors } = await launch(dir, ['--labels', 'a'])
+  const copy = path.join(dir, 'three.onnx')
+  writeFileSync(copy, (await import('fs')).readFileSync(MODEL))
+  const result = await page.evaluate(([root, model]) => window.api.prelabelRun(root, model, ['q.png'], []), [dir, copy])
+  expect(result.failed[0]).toContain('3 classes')
+  expect(existsSync(path.join(dir, 'q.json'))).toBe(false)
+  await finish(app, errors)
+})
+
+// Needs efficientsam:10m in SEAMLINE_LABEL_MODELS, about 40 MB, so it's left out by default
+test('AI polygon and AI mask with SAM', async () => {
+  test.skip(!process.env.SEAMLINE_LABEL_MODELS, 'set SEAMLINE_LABEL_MODELS to a folder with efficientsam:10m')
+  const dir = await project('sam', {})
+  await discs(dir, 'd', [{ cx: 200, cy: 150, r: 70, color: '#e0a030' }])
+  const { app, page, errors } = await launch(dir, ['--labels', 'disc'])
+  await open(page, 'd.png')
+  await page.getByRole('menuitem', { name: 'AI' }).click()
+  await page.getByRole('menuitem', { name: 'Model for AI polygon and mask' }).hover()
+  await page.getByRole('menuitemcheckbox', { name: 'EfficientSam (speed)' }).click()
+  await page.getByRole('toolbar').getByRole('button', { name: 'AI polygon', exact: true }).click()
+  await click(page, 200, 150)
+  await expect(page.locator('.loading.notice')).toHaveCount(0, { timeout: 60000 })
+  await page.keyboard.press('Enter')
+  await saved(page)
+  const [polygon] = shapesIn(dir, 'd')
+  expect(polygon.shape_type).toBe('polygon')
+  const xs = polygon.points.map((p: number[]) => p[0])
+  expect(Math.min(...xs)).toBeGreaterThan(120)
+  expect(Math.max(...xs)).toBeLessThan(280)
+  await page.getByRole('toolbar').getByRole('button', { name: 'AI mask', exact: true }).click()
+  await click(page, 200, 150)
+  await expect(page.locator('.loading.notice')).toHaveCount(0, { timeout: 60000 })
+  await page.keyboard.press('Enter')
+  await saved(page)
+  const mask = shapesIn(dir, 'd')[1]
+  expect(mask.shape_type).toBe('mask')
+  // labelme's layout: an inclusive box, and a one-channel PNG of 0s and 1s that size
+  const png = Buffer.from(mask.mask, 'base64')
+  expect((await sharp(png).metadata()).channels).toBe(1)
+  const { data, info } = await sharp(png).extractChannel(0).raw().toBuffer({ resolveWithObject: true })
+  const [[x0, y0], [x1, y1]] = mask.points
+  expect([info.width, info.height]).toEqual([x1 - x0 + 1, y1 - y0 + 1])
+  expect(Math.max(...data)).toBe(1)
+  // Nearly all of it on the disc: the model may add a speck elsewhere, as it would in labelme
+  let on = 0, all = 0
+  for (let y = 0; y < info.height; y++) for (let x = 0; x < info.width; x++) {
+    if (!data[y * info.width + x]) continue
+    all++
+    if (Math.hypot(x0 + x + 0.5 - 200, y0 + y + 0.5 - 150) <= 72) on++
+  }
+  expect(on / all).toBeGreaterThan(0.95)
+  expect(all).toBeGreaterThan(Math.PI * 65 * 65)
+  await finish(app, errors)
+})

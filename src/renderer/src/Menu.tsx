@@ -5,7 +5,7 @@ import type { Command, Commands } from './Labeler'
 
 // labelme's menus, in its order, plus the AI menu. An item is a command id, '-' for a
 // separator, or a submenu.
-export type Item = string | '-' | { label: string; items: Item[] }
+export type Item = string | '-' | { label: string; items: Item[]; prefix?: string }
 export type MenuSpec = { label: string; items: Item[] }[]
 
 type Props = {
@@ -16,19 +16,21 @@ type Props = {
 }
 
 export function MenuList({ items, commands, config, mac, onDone }: { items: Item[]; commands: Commands; config: Config; mac: boolean; onDone: () => void }) {
-  const [sub, setSub] = useState<number | null>(null)
+  const [open, setOpen] = useState<number | null>(null)
   const visible = items.filter((it) => typeof it !== 'string' || it === '-' || commands[it])
   return (
     <div className="menu" role="menu">
       {visible.map((it, i) => {
         if (it === '-') return i > 0 && i < visible.length - 1 && visible[i - 1] !== '-' ? <div key={i} className="sep" role="separator" /> : null
         if (typeof it !== 'string') {
-          const enabled = it.items.some((x) => typeof x === 'string' && x !== '-' && commands[x])
+          // Submenus of things that come and go, such as recent files, list them as the menu opens
+          const sub = it.prefix ? { ...it, items: Object.keys(commands).filter((k) => k.startsWith(it.prefix!)) } : it
+          const enabled = sub.items.some((x) => typeof x === 'string' && x !== '-' && commands[x])
           return (
-            <div key={i} className={`item sub ${sub === i ? 'open' : ''}`} role="menuitem" aria-haspopup aria-disabled={!enabled}
-              onMouseEnter={() => setSub(i)} onMouseLeave={() => setSub(null)}>
+            <div key={i} className={`item sub ${open === i ? 'open' : ''}`} role="menuitem" aria-haspopup aria-disabled={!enabled}
+              onMouseEnter={() => setOpen(i)} onMouseLeave={() => setOpen(null)}>
               <span className="mark" /><span className="label">{it.label}</span><ChevronRight size={14} />
-              {sub === i && enabled && <MenuList items={it.items} commands={commands} config={config} mac={mac} onDone={onDone} />}
+              {open === i && enabled && <MenuList items={sub.items} commands={commands} config={config} mac={mac} onDone={onDone} />}
             </div>
           )
         }

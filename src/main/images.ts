@@ -121,11 +121,17 @@ export async function imageData(root: string, name: string): Promise<string> {
   return out.toString('base64')
 }
 
-/** RGB pixels of an image at its upright size, for models */
+/** RGB pixels of an image, upright, no bigger than maxSide; with the size of the whole image */
 export async function rgbPixels(root: string, name: string, maxSide?: number) {
   const file = isEmbedded(root, name) ? await embeddedFile(imagePath(root, name)) : imagePath(root, name)
+  if (path.extname(file).toLowerCase() === '.bmp') throw new Error("AI tools can't read BMP files yet")
+  const info = await sharp(file, { limitInputPixels: false }).metadata()
+  const swapped = (info.orientation ?? 1) >= 5
+  const fullWidth = swapped ? info.height! : info.width!
+  const fullHeight = swapped ? info.width! : info.height!
   let image = sharp(file, { limitInputPixels: false }).rotate().removeAlpha().toColourspace('srgb')
   if (maxSide) image = image.resize({ width: maxSide, height: maxSide, fit: 'inside', withoutEnlargement: true })
-  const { data, info } = await image.raw().toBuffer({ resolveWithObject: true })
-  return { data, width: info.width, height: info.height, channels: info.channels }
+  const { data, info: out } = await image.raw().toBuffer({ resolveWithObject: true })
+  if (out.channels !== 3) throw new Error(`Expected RGB pixels, got ${out.channels} channels`)
+  return { data, width: out.width, height: out.height, fullWidth, fullHeight }
 }

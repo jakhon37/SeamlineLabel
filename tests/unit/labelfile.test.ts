@@ -100,3 +100,23 @@ describe('AI shapes', () => {
     expect(s).toEqual({ count: 1, ai: 2, score: 0.4, classes: { dog: 1 }, labelled: true })
   })
 })
+
+describe('labelme 7', () => {
+  test('oriented rectangles and locked shapes read, and write back as labelme 7 writes them', () => {
+    const text = JSON.stringify({
+      version: '7.9.1', flags: {}, imagePath: 'a.png', imageData: null, imageHeight: 10, imageWidth: 10,
+      shapes: [
+        { label: 'box', points: [[1, 1], [5, 2], [4, 6], [0, 5]], group_id: null, description: '', shape_type: 'oriented_rectangle', flags: {}, mask: null, locked: true },
+        { label: 'p', points: [[1, 2]], group_id: null, description: '', shape_type: 'point', flags: {}, mask: null }
+      ]
+    })
+    const doc = parseLabelFile(text)
+    expect(doc.shapes[0]).toMatchObject({ shape_type: 'oriented_rectangle', locked: true, other: {} })
+    expect(doc.shapes[1].locked).toBeUndefined()
+    const out = JSON.parse(serializeLabelFile(doc))
+    expect(Object.keys(out.shapes[0]).at(-1)).toBe('locked')
+    expect('locked' in out.shapes[1]).toBe(false)
+    expect(() => parseLabelFile(text.replace('"locked":true', '"locked":1'))).toThrow(/locked/)
+    expect(() => parseLabelFile(text.replace('[[1,1],[5,2],[4,6],[0,5]]', '[[1,1],[5,2]]'))).toThrow(/4 points/)
+  })
+})

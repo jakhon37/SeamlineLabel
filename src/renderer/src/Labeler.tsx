@@ -1,6 +1,6 @@
 import {
   Check, CheckCheck, Circle, Eraser, Eye, EyeOff, Hexagon, Maximize, MousePointer2, Paintbrush, Plus, Redo2, SkipForward,
-  Slash, Sparkles, Spline, Square, Trash2, Undo2, Wand2, X, Dot, ScanLine
+  Slash, Sparkles, Spline, Square, Trash2, Undo2, Wand2, X, Dot, ScanLine, Lock
 } from 'lucide-react'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { type Config, matches, type ShortcutName, shortcutList } from '../../shared/config'
@@ -923,13 +923,14 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     const order = [...selectedRef.current, ...list.map((_, i) => list.length - 1 - i).filter((i) => !selectedRef.current.includes(i))]
     for (const i of order) {
       const s = list[i]
-      if (!s || s.hidden || s.shape_type === 'mask') continue
+      // A lock keeps a shape's geometry; an oriented rectangle's corners move together
+      if (!s || s.hidden || s.locked || s.shape_type === 'mask' || s.shape_type === 'oriented_rectangle') continue
       const v = nearestVertex(s, p, tol)
       if (v >= 0) return { shape: i, vertex: v, edge: -1 }
     }
     for (const i of order) {
       const s = list[i]
-      if (!s || s.hidden) continue
+      if (!s || s.hidden || s.locked) continue
       const e = nearestEdge(s, p, tol)
       if (e >= 0) return { shape: i, vertex: -1, edge: e }
     }
@@ -1040,9 +1041,9 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
         setSelected(sel.includes(hit) ? sel.filter((i) => i !== hit) : [...sel, hit])
         return
       }
-      const moving = sel.includes(hit) ? sel : [hit]
+      const moving = (sel.includes(hit) ? sel : [hit]).filter((i) => !list[i].locked)
       if (!sel.includes(hit)) setSelected([hit])
-      if (!ro) drag.current = { kind: 'move', shapes: moving, x: p[0], y: p[1], press, active: false, start: list }
+      if (!ro && moving.length) drag.current = { kind: 'move', shapes: moving, x: p[0], y: p[1], press, active: false, start: list }
       return
     }
     if (!multi) setSelected([])
@@ -1217,7 +1218,8 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     apply(prev)
   }
   const removeSelected = () => {
-    const sel = new Set(selectedRef.current)
+    const sel = new Set(selectedRef.current.filter((i) => !shapesRef.current[i]?.locked))
+    if (sel.size < selectedRef.current.length) setNotice('Locked shapes stay: unlock them first.')
     if (!sel.size) return
     setShapes(shapesRef.current.filter((_, i) => !sel.has(i)))
     setSelected([])
@@ -1380,7 +1382,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     paste()
   }
   const merge = () => {
-    const result = mergePolygons(shapesRef.current, selectedRef.current)
+    const result = mergePolygons(shapesRef.current, selectedRef.current.filter((i) => !shapesRef.current[i]?.locked))
     if (!result) return setNotice('Select two or more polygons or boxes to merge.')
     setShapes(result.shapes)
     setSelected(result.selected)
@@ -1400,8 +1402,9 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   }
   const nudge = (dx: number, dy: number) => {
     const m = metaRef.current
-    if (!m || !selectedRef.current.length) return
-    const next = moveShapes(shapesRef.current, selectedRef.current, dx, dy, m.width, m.height)
+    const which = selectedRef.current.filter((i) => !shapesRef.current[i]?.locked)
+    if (!m || !which.length) return
+    const next = moveShapes(shapesRef.current, which, dx, dy, m.width, m.height)
     if (next !== shapesRef.current) setShapes(next)
   }
   const undoLastPoint = () => {
@@ -1549,6 +1552,14 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     redo: { label: 'Redo', run: () => stepHistory(redo, undo), shortcut: 'redo', enabled: () => has() && redo.current.length > 0 },
     remove_selected_point: { label: 'Remove point', run: removeHoveredPoint, shortcut: 'remove_selected_point', enabled: has },
     add_multiple_points: { label: 'Add points to edge…', run: addMultiplePoints, shortcut: 'add_multiple_points', enabled: has },
+    toggle_lock: {
+      label: 'Lock shapes', run: () => {
+        const which = selectedRef.current
+        const lock = !which.every((i) => shapesRef.current[i]?.locked)
+        setShapes(shapesRef.current.map((x, i) => (which.includes(i) ? { ...x, locked: lock || undefined } : x)))
+      },
+      enabled: () => has() && sel(), checked: () => sel() && selectedRef.current.every((i) => shapesRef.current[i]?.locked)
+    },
     toggle_keep_prev_mode: { label: 'Keep previous annotation', run: () => setSettings((s) => ({ ...s, keepPrev: !s.keepPrev })), shortcut: 'toggle_keep_prev_mode', checked: () => settings.keepPrev },
 
     fill_drawing: { label: 'Fill polygon while drawing', run: () => setSettings((s) => ({ ...s, fillDrawing: !s.fillDrawing })), checked: () => settings.fillDrawing },
@@ -1898,6 +1909,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
                       }} />
                     <i style={{ background: colorOf(s.label) }} />
                     <span className="name">{s.label}{s.group_id !== null ? ` (${s.group_id})` : ''}</span>
+                    {s.locked && <Lock size={12} className="muted" aria-label="Locked" />}
                     {isAi(s) && <span className="tag">AI{scoreOf(s) !== undefined ? ` ${percent(scoreOf(s)!)}` : ''}</span>}
                     <span className="muted">{describe(s)}</span>
                   </div>

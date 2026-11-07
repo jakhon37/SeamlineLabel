@@ -2,7 +2,8 @@
 // forth between labelme, LabelMeV2, Seamline and this app. Saving a file labelme wrote
 // gives back the same bytes.
 
-export const SHAPE_TYPES = ['polygon', 'rectangle', 'circle', 'line', 'point', 'linestrip', 'points', 'mask'] as const
+// labelme 7 added oriented rectangles: four corners, kept square to each other
+export const SHAPE_TYPES = ['polygon', 'rectangle', 'oriented_rectangle', 'circle', 'line', 'point', 'linestrip', 'points', 'mask'] as const
 export type ShapeType = (typeof SHAPE_TYPES)[number]
 
 export type Shape = {
@@ -16,6 +17,8 @@ export type Shape = {
   mask: string | null
   /** Keys labelme doesn't know, such as an AI shape's score, kept as they were */
   other: Record<string, unknown>
+  /** labelme 7's lock: the shape can't be moved or reshaped. Saved only when set, as labelme does. */
+  locked?: boolean
   /** Hidden in the window from the shape list. Never saved. */
   hidden?: boolean
 }
@@ -35,7 +38,8 @@ export type LabelDoc = {
 // What labelme writes as `version` is its own version. New files say 5.5.0, as Seamline's do.
 export const FORMAT_VERSION = '5.5.0'
 
-const SHAPE_KEYS = new Set(['label', 'points', 'group_id', 'shape_type', 'flags', 'description', 'mask'])
+const SHAPE_KEYS = new Set(['label', 'points', 'group_id', 'shape_type', 'flags', 'description', 'mask', 'locked'])
+const POINT_COUNT: Record<string, number> = { point: 1, rectangle: 2, line: 2, circle: 2, mask: 2, oriented_rectangle: 4 }
 const DOC_KEYS = new Set(['version', 'imageData', 'imagePath', 'shapes', 'flags', 'imageHeight', 'imageWidth'])
 
 export class LabelFileError extends Error {}
@@ -76,6 +80,8 @@ export function readShape(raw: unknown, index = 0): Shape {
   if (raw.mask !== undefined && raw.mask !== null && typeof raw.mask !== 'string') {
     fail(`${where} mask must be a base64 PNG`)
   }
+  if (type === 'oriented_rectangle' && points.length !== 4) fail(`${where} is an oriented rectangle, so it needs 4 points`)
+  if (raw.locked !== undefined && typeof raw.locked !== 'boolean') fail(`${where} locked must be true or false`)
   const other: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(raw)) if (!SHAPE_KEYS.has(k)) other[k] = v
   return {
@@ -86,9 +92,13 @@ export function readShape(raw: unknown, index = 0): Shape {
     description: (raw.description as string | null | undefined) ?? '',
     flags: readFlags(raw.flags, where),
     mask: (raw.mask as string | null | undefined) ?? null,
-    other
+    other,
+    ...(raw.locked === true ? { locked: true } : {})
   }
 }
+
+/** labelme 7 refuses a rectangle without two points and the like; files written here never have them */
+export const pointCount = (type: ShapeType) => POINT_COUNT[type]
 
 /** A whole label file. Throws LabelFileError with a reason a person can act on. */
 export function parseLabelFile(text: string): LabelDoc {
@@ -162,7 +172,8 @@ export function shapeRecord(s: Shape, floats = false): Record<string, unknown> {
     description: s.description,
     shape_type: s.shape_type,
     flags: s.flags,
-    mask: s.mask
+    mask: s.mask,
+    ...(s.locked ? { locked: true } : {})
   })
 }
 

@@ -6,7 +6,7 @@ import { accepted, type Shape } from '../../shared/labelfile'
 
 export type Pt = number[]
 
-export const CLOSED = new Set(['polygon', 'rectangle', 'circle', 'mask'])
+export const CLOSED = new Set(['polygon', 'rectangle', 'oriented_rectangle', 'circle', 'mask'])
 export const EDITABLE_POINTS = new Set(['polygon', 'linestrip'])
 
 export function bounds(s: Shape): [number, number, number, number] {
@@ -55,7 +55,7 @@ export function segmentDistance(p: Pt, a: Pt, b: Pt) {
 /** Edges as index pairs: closed shapes wrap around, open ones don't */
 export function edges(s: Shape): [number, number][] {
   const n = s.points.length
-  if (s.shape_type === 'polygon') return Array.from({ length: n }, (_, i) => [i, (i + 1) % n] as [number, number])
+  if (s.shape_type === 'polygon' || s.shape_type === 'oriented_rectangle') return Array.from({ length: n }, (_, i) => [i, (i + 1) % n] as [number, number])
   if (s.shape_type === 'linestrip' || s.shape_type === 'line') return Array.from({ length: Math.max(0, n - 1) }, (_, i) => [i, i + 1] as [number, number])
   return []
 }
@@ -194,6 +194,7 @@ export function describe(s: Shape) {
     case 'polygon': return `${s.points.length} pts`
     case 'linestrip': return `line strip · ${s.points.length} pts`
     case 'rectangle': return 'box'
+    case 'oriented_rectangle': return 'turned box'
     default: return s.shape_type
   }
 }

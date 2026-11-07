@@ -2,8 +2,10 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, shell } from 
 import { existsSync, promises as fs, readFileSync, writeFileSync } from 'fs'
 import path from 'path'
 import { pathToFileURL } from 'url'
+import { download, listModels, release, segment } from './ai'
 import { type Args, loadConfig, type LoadedConfig, parseArgs, USAGE, USER_CONFIG } from './config'
 import { cacheRoot, imageData, openImage, setCacheDir } from './images'
+import { modelInfo, prelabel, stopPrelabel } from './prelabel'
 import {
   closeProject, imagePath, labelPath, loadLabels, openProject, type ProjectInfo, rootsOpen, saveLabels,
   saveProjectFile, type SaveRequest, summarizeAll
@@ -129,6 +131,18 @@ function registerIpc() {
   ipcMain.handle('app:link', (_e, url: string) => {
     if (/^https:\/\//.test(url)) return shell.openExternal(url)
   })
+  ipcMain.handle('ai:models', () => listModels())
+  ipcMain.handle('ai:download', (_e, name: string) => download(name, (p) => send('ai:download', p)))
+  ipcMain.handle('ai:segment', (_e, root: string, name: string, model: string, points: number[][], labels: number[], mode: 'polygon' | 'mask') =>
+    segment(root, name, model, points, labels, mode))
+  ipcMain.handle('prelabel:pick', async () => {
+    const r = await dialog.showOpenDialog(win!, { title: 'Choose a segmentation model', properties: ['openFile'], filters: [{ name: 'ONNX models', extensions: ['onnx'] }] })
+    return r.canceled ? null : modelInfo(r.filePaths[0])
+  })
+  ipcMain.handle('prelabel:info', (_e, file: string) => modelInfo(file))
+  ipcMain.handle('prelabel:run', (_e, root: string, model: string, names: string[], classes: string[]) =>
+    prelabel(root, model, names, classes, loaded?.config.prelabel.min_area ?? 20, (p) => send('prelabel:progress', p)))
+  ipcMain.handle('prelabel:stop', () => stopPrelabel())
 }
 
 function buildMenu() {
@@ -207,4 +221,7 @@ app.whenReady().then(async () => {
   createWindow()
 })
 
-app.on('window-all-closed', () => app.quit())
+app.on('window-all-closed', () => {
+  stopPrelabel()
+  release().finally(() => app.quit())
+})

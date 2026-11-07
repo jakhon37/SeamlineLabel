@@ -12,7 +12,7 @@ const SCALE = 100
 const MIN_AREA = 4
 
 // Paint and cuts work on areas, so only area shapes take part: masks, lines and points don't
-export const paintable = (s: Shape) => ['polygon', 'rectangle', 'circle'].includes(s.shape_type) && !s.hidden
+export const paintable = (s: Shape) => ['polygon', 'rectangle', 'circle'].includes(s.shape_type) && !s.hidden && !s.locked
 
 const toPath = (points: number[][]): Path =>
   points.map(([x, y]) => ({ X: Math.round(x * SCALE), Y: Math.round(y * SCALE) }))

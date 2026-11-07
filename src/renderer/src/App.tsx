@@ -1,5 +1,5 @@
 import { FolderOpen } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { type Config, formatKeys, matches, shortcutList } from '../../shared/config'
 import Labeler, { type Commands, type LabelerHandle, type Settings } from './Labeler'
 import Logo from './Logo'
@@ -47,10 +47,10 @@ function initialSettings(config: Config): Settings {
 }
 
 const MENUS: MenuSpec = [
-  { label: 'File', items: ['open', 'open_dir', { label: 'Open recent', items: [] }, '-', 'open_next', 'open_prev', '-', 'save', 'save_as', 'auto_save', 'store_data', 'save_to', '-', 'delete_file', 'reveal', 'close', '-', 'preferences', 'quit'] },
-  { label: 'Edit', items: ['create_polygon', 'create_rectangle', 'create_circle', 'create_line', 'create_point', 'create_linestrip', 'create_ai_polygon', 'create_ai_mask', 'create_brush', 'create_eraser', 'edit_polygon', '-', 'edit_label', 'duplicate_polygon', 'copy_polygon', 'paste_polygon', 'delete_polygon', 'merge_polygons', '-', 'undo', 'redo', 'remove_selected_point', 'add_multiple_points', '-', 'toggle_keep_prev_mode'] },
+  { label: 'File', items: ['open', 'open_dir', { label: 'Open recent', items: [], prefix: 'recent:' }, '-', 'open_next', 'open_prev', '-', 'save', 'save_as', 'auto_save', 'store_data', 'save_to', '-', 'delete_file', 'reveal', 'close', '-', 'preferences', 'quit'] },
+  { label: 'Edit', items: ['create_polygon', 'create_rectangle', 'create_circle', 'create_line', 'create_point', 'create_linestrip', 'create_ai_polygon', 'create_ai_mask', 'create_brush', 'create_eraser', 'edit_polygon', '-', 'edit_label', 'duplicate_polygon', 'copy_polygon', 'paste_polygon', 'delete_polygon', 'merge_polygons', '-', 'undo', 'redo', 'remove_selected_point', 'add_multiple_points', 'toggle_lock', '-', 'toggle_keep_prev_mode'] },
   { label: 'View', items: ['dock_flags', 'dock_labels', 'dock_shapes', 'dock_files', '-', 'fill_drawing', 'toggle_all_polygons', '-', 'zoom_in', 'zoom_out', 'zoom_to_original', 'fit_window', 'fit_width', 'keep_prev_scale', '-', 'brightness_contrast', 'keep_prev_brightness_contrast', '-', 'dark_mode'] },
-  { label: 'AI', items: [{ label: 'Model for AI polygon and mask', items: [] }, '-', 'prelabel_pick', 'prelabel_one', 'prelabel_all', '-', 'review_accept', 'review_reject', 'review_skip', 'review_accept_all', 'order_certainty'] },
+  { label: 'AI', items: [{ label: 'Model for AI polygon and mask', items: [], prefix: 'ai_model:' }, '-', 'prelabel_pick', 'prelabel_one', 'prelabel_all', '-', 'review_accept', 'review_reject', 'review_skip', 'review_accept_all', 'order_certainty'] },
   { label: 'Help', items: ['shortcuts', 'docs', 'about'] }
 ]
 const CONTEXT = ['edit_label', 'duplicate_polygon', 'copy_polygon', 'paste_polygon', 'delete_polygon', 'merge_polygons', '-', 'undo', 'redo', '-', 'add_multiple_points', 'remove_selected_point', '-', 'edit_polygon', 'create_polygon', 'create_rectangle']
@@ -189,19 +189,6 @@ export default function App() {
     ;(start?.recent ?? []).forEach((r, i) => (own[`recent:${i}`] = { label: r, run: () => open(r) }))
     return { ...(labeler.current?.commands ?? {}), ...own }
   }
-  const menus = useMemo((): MenuSpec => {
-    const all = commands()
-    return MENUS.map((m) => ({
-      ...m,
-      items: m.items.map((it) => {
-        if (typeof it === 'string') return it
-        if (it.label === 'Open recent') return { ...it, items: (start?.recent ?? []).map((_, i) => `recent:${i}`) }
-        return { ...it, items: Object.keys(all).filter((k) => k.startsWith('ai_model:')) }
-      })
-    }))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [start, data, settings])
-
   // App-wide shortcuts, for when no folder is open: the labeller handles the rest
   useEffect(() => {
     if (!config) return
@@ -247,7 +234,7 @@ export default function App() {
     <div className="app" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       <header className="topbar">
         <div className="brand"><Logo size={22} /> Seamline Label</div>
-        <MenuBar menus={menus} commands={commands} config={config} mac={mac} />
+        <MenuBar menus={MENUS} commands={commands} config={config} mac={mac} />
         <div className="spacer" />
         {data && (
           <span className="muted" title={data.outputDir ? `Label files go to ${data.outputDir}` : undefined}>
