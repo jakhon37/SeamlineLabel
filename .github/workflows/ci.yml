@@ -17,8 +17,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -26,11 +26,17 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npx electron-vite build
+      # Ubuntu's AppArmor keeps apps without a profile from the user namespaces Chromium's sandbox uses
+      - name: Allow Chromium's sandbox
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: End-to-end tests
         run: npx playwright test --reporter=line
         env:
           E2E_SHOTS: ${{ runner.temp }}/shots
-      - uses: actions/upload-artifact@v4
+          # Prints the app's own output, which is all there is to go on when a launch fails
+          DEBUG: pw:browser
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: e2e-${{ matrix.os }}
@@ -44,14 +50,16 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
       - run: npm ci
       - run: npx electron-vite build
+      - name: Allow Chromium's sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Write label files with the app
         run: npx playwright test e2e/labelme.spec.ts e2e/ai.spec.ts --reporter=line
         env:
