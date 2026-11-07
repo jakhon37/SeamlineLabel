@@ -78,15 +78,15 @@ export function fakeGpu(base: string) {
   const bin = path.join(base, 'bin')
   rmSync(base, { recursive: true, force: true })
   mkdirSync(bin, { recursive: true })
-  mkdirSync(path.join(home, 'myseg-studio/venv/bin'), { recursive: true })
+  mkdirSync(path.join(home, 'seamline/venv/bin'), { recursive: true })
   const script = (file: string, text: string) => {
     writeFileSync(file, text)
     chmodSync(file, 0o755)
   }
   for (const [name, text] of Object.entries(COMMANDS)) script(path.join(bin, name), text)
-  script(path.join(home, 'myseg-studio/venv/bin/python'), TRAINER)
+  script(path.join(home, 'seamline/venv/bin/python'), TRAINER)
 
-  const projectOf = (run: string) => path.join(home, 'myseg-studio/projects', run)
+  const projectOf = (run: string) => path.join(home, 'seamline/projects', run)
   return {
     env: {
       PATH: `${bin}:${process.env.PATH}`,
@@ -149,6 +149,6 @@ export async function startRemote(page: Page) {
   await page.getByRole('tab', { name: /Train/ }).click()
   await page.getByLabel('Run on').selectOption('ssh')
   await page.getByLabel('SSH host').fill('gpu@fake')
-  await page.getByLabel('Remote folder').fill('myseg-studio')
+  await page.getByLabel('Remote folder').fill('seamline')
   await page.getByRole('button', { name: /Train on 2 labelled/ }).click()
 }

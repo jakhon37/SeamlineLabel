@@ -78,7 +78,7 @@ export default function Trainer({ data, active, onError, onTraining }: Props) {
   }
   const [where, setWhere] = useState(stored('trainWhere', 'local'))
   const [host, setHost] = useState(stored('trainHost', ''))
-  const [dir, setDir] = useState(stored('trainDir', 'myseg-studio'))
+  const [dir, setDir] = useState(stored('trainDir', 'seamline'))
   const [remote, setRemote] = useState<string>('')
   const logRef = useRef<HTMLPreElement>(null)
 

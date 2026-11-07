@@ -1,6 +1,7 @@
 import { Brain, FolderOpen, PenTool } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import Labeler from './Labeler'
+import Logo from './Logo'
 import Trainer from './Trainer'
 import type { ImageItem, OpenProject, Project } from './types'
 
@@ -50,7 +51,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">mySeg Studio</div>
+        <div className="brand"><Logo size={22} /> Seamline</div>
         {data && (
           <div className="switch" role="tablist">
             <button role="tab" aria-selected={mode === 'label'} className={mode === 'label' ? 'on' : ''}
@@ -72,6 +73,7 @@ export default function App() {
       {error && <div className="error" onClick={() => setError('')}>{error}</div>}
       {!data ? (
         <div className="empty">
+          <Logo size={72} />
           <h1>Open a folder of images</h1>
           <p>Labels are saved beside each image as LabelMe JSON, so folders you labelled in LabelMe open as they are.</p>
           <button className="primary" onClick={() => open(window.api.pickProject)}>

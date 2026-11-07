@@ -5,7 +5,7 @@ import path from 'path'
 
 // Needs a real GPU machine: MYSEG_E2E_SSH=user@host npm run test:e2e
 const HOST = process.env.MYSEG_E2E_SSH
-const REMOTE = process.env.MYSEG_E2E_DIR || 'myseg-studio'
+const REMOTE = process.env.MYSEG_E2E_DIR || 'seamline'
 const REPO = path.resolve(__dirname, '../..')
 const DIR = (process.env.E2E_DIR || '/tmp/myseg-e2e') + '-remote'
 const OTHER = DIR + '-other'

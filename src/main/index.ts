@@ -603,7 +603,8 @@ app.whenReady().then(() => {
   registerIpc()
   win = new BrowserWindow({
     width: 1500, height: 940, minWidth: 1000, minHeight: 640,
-    backgroundColor: '#14161a', autoHideMenuBar: true, title: 'mySeg Studio',
+    backgroundColor: '#14161a', autoHideMenuBar: true, title: 'Seamline',
+    icon: path.join(__dirname, '../../resources/icon.png'),
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: false }
   })
   // Saves wait a moment after each change: let the last one reach the disk before closing

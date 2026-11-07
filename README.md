@@ -1,6 +1,6 @@
-# mySeg Studio
+# Seamline
 
-Label images and train segmentation models in one desktop app. Press `Ctrl+1` for Label and `Ctrl+2` for Train; each keeps its place when you switch.
+Label images and train segmentation models in one desktop app, built on [mySegLib](../README.md). Press `Ctrl+1` for Label and `Ctrl+2` for Train; each keeps its place when you switch.
 
 ## Run
 
