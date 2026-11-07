@@ -9,3 +9,11 @@
 
 .DS_Store
 .idea/
+
+# App
+node_modules/
+/out/
+/release/
+/test-results/
+/playwright-report/
+/.tools/
