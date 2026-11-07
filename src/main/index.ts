@@ -1,636 +1,210 @@
-import { ChildProcess, execFile, spawn } from 'child_process'
-import { app, BrowserWindow, dialog, ipcMain, net, protocol } from 'electron'
-import { existsSync, promises as fs } from 'fs'
-import { tmpdir } from 'os'
+import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, shell } from 'electron'
+import { existsSync, promises as fs, readFileSync, writeFileSync } from 'fs'
 import path from 'path'
 import { pathToFileURL } from 'url'
-import sharp from 'sharp'
-import { summarize } from '../shared/labels'
+import { type Args, loadConfig, type LoadedConfig, parseArgs, USAGE, USER_CONFIG } from './config'
+import { cacheRoot, imageData, openImage, setCacheDir } from './images'
+import {
+  closeProject, imagePath, labelPath, loadLabels, openProject, type ProjectInfo, rootsOpen, saveLabels,
+  saveProjectFile, type SaveRequest, summarizeAll
+} from './project'
 
-const REPO = path.resolve(__dirname, '../../..')
-const PYTHON = process.env.MYSEG_PYTHON || path.join(REPO, '.venv/bin/python')
-const ENGINE = path.join(REPO, 'engine/studio.py')
-const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff'])
-const PALETTE = ['#4f8cff', '#ff6b6b', '#3ecf8e', '#f7b731', '#b57bff', '#22c7d6', '#ff8f4d', '#ec6fb3']
-const TILE = 512
-const DIRECT_MAX = 4096
-sharp.cache(false)
+const NAME = 'Seamline Label'
+app.setName(NAME)
 
-let root = ''
-let win: BrowserWindow | null = null
-let job: { proc: ChildProcess; base: string; run: string; offset: number; timer: NodeJS.Timeout } | null = null
-type RemoteInfo = { host: string; dir: string; project: string; pid: number; fetched: boolean }
-// Only ever the open folder's run. `base` is that folder, as `root` moves on when another opens.
-type RemoteJob = { base: string; run: string; info: RemoteInfo; events: number; log: number; timer: NodeJS.Timeout; polling: boolean; lost: boolean; stopped: boolean }
-let remoteJob: RemoteJob | null = null
-let launching = false
-type PrelabelJob = { proc: ChildProcess; stopped: boolean }
-let prelabelJob: PrelabelJob | null = null
-// Label files are read, changed and written back: one at a time, or a pre-label could undo a save
-let writes: Promise<unknown> = Promise.resolve()
-function serial<T>(fn: () => Promise<T>) {
-  const result = writes.then(fn)
-  writes = result.catch(() => {})
-  return result
+// In development Electron's own arguments come first: `electron . image.jpg`
+const argv = process.argv.slice(app.isPackaged ? 1 : 2)
+let args: Args
+try {
+  args = parseArgs(argv)
+} catch (e: any) {
+  process.stderr.write(`${e.message}\n\n${USAGE}`)
+  process.exit(2)
 }
-
-const SSH_OPTS = [
-  '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ControlMaster=auto',
-  '-o', `ControlPath=${path.join(tmpdir(), 'myseg-ssh-%C')}`, '-o', 'ControlPersist=60'
-]
-// Room left on the remote disk for the environment, checkpoints and logs
-const REMOTE_RESERVE_KB = 3 * 1024 * 1024
-const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
+if (args.help) {
+  process.stdout.write(USAGE)
+  process.exit(0)
+}
+if (args.version) {
+  process.stdout.write(`${NAME} ${app.getVersion()}\n`)
+  process.exit(0)
+}
 
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'myseg', privileges: { standard: true, supportFetchAPI: true, stream: true, secure: true } }
+  { scheme: 'myseg', privileges: { standard: true, supportFetchAPI: true, stream: true, secure: true, corsEnabled: true } }
 ])
 
-const metaIn = (base: string, ...p: string[]) => path.join(base, '.myseg', ...p)
-const meta = (...p: string[]) => metaIn(root, ...p)
-const sidecar = (name: string, base = root) => path.join(base, name.replace(/\.[^.]+$/, '') + '.json')
+let win: BrowserWindow | null = null
+let loaded: LoadedConfig
+let configError = ''
 
-// A window can still be saving to the last folder as the next one opens, so each
-// save names its folder. Only folders opened in this run are accepted.
-const opened = new Set<string>()
-function labelFile(base: string, name: string) {
-  const full = path.resolve(base, name)
-  if (!opened.has(base) || !full.startsWith(base + path.sep)) throw new Error('Path outside project')
-  return sidecar(name, base)
-}
-
-// Image names come from the renderer: never let one leave the project folder
-function inProject(name: string): string {
-  const full = path.resolve(root, name)
-  if (!root || !full.startsWith(root + path.sep)) throw new Error('Path outside project')
-  return full
-}
-
-async function readJson(file: string): Promise<any | null> {
+type State = { recent: string[]; bounds?: { width: number; height: number; x?: number; y?: number }; maximized?: boolean }
+const statePath = () => path.join(app.getPath('userData'), 'state.json')
+function readState(): State {
   try {
-    return JSON.parse(await fs.readFile(file, 'utf8'))
+    return { recent: [], ...JSON.parse(readFileSync(statePath(), 'utf8')) }
   } catch {
-    return null
+    return { recent: [] }
   }
 }
-
-// No file means no labels yet. A file we can't read is someone's labels, so this throws
-// rather than let anyone write over it.
-async function readLabels(file: string): Promise<any | null> {
-  let text: string
+function writeState(state: State) {
   try {
-    text = await fs.readFile(file, 'utf8')
-  } catch (e: any) {
-    if (e.code === 'ENOENT') return null
-    throw new Error(`${path.basename(file)} can't be read (${e.code}), so it's left unchanged.`)
-  }
-  let doc: any = null
-  try {
-    doc = JSON.parse(text)
+    writeFileSync(statePath(), JSON.stringify(state, null, 2))
   } catch {
-    // Reported below with the other bad files
-  }
-  const shapes = doc?.shapes ?? []
-  const valid = doc && typeof doc === 'object' && !Array.isArray(doc) &&
-    Array.isArray(shapes) && shapes.every((s: any) => Array.isArray(s?.points))
-  if (!valid) throw new Error(`${path.basename(file)} isn't a readable label file, so it's left unchanged.`)
-  return doc
-}
-
-async function writeAtomic(file: string, text: string) {
-  const tmp = `${file}.${process.pid}.tmp`
-  await fs.writeFile(tmp, text)
-  await fs.rename(tmp, file)
-}
-
-async function openProject(dir: string) {
-  // The slow reading comes first: the open folder only changes once it's done
-  const base = path.resolve(dir)
-  const names = (await fs.readdir(base))
-    .filter((n) => IMAGE_EXTS.has(path.extname(n).toLowerCase()))
-    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-  const read = await Promise.all(names.map((n) =>
-    readLabels(sidecar(n, base)).then((doc) => ({ doc, broken: false }), () => ({ doc: null, broken: true }))
-  ))
-  const images = names.map((name, i) => ({
-    name, ...summarize(read[i].doc?.shapes ?? []), broken: read[i].broken
-  }))
-  // Starting a run works on the open folder throughout
-  if (launching && base !== root) throw new Error('A training run is starting. Open another folder once it has.')
-  stopPrelabel()
-  prelabelJob = null
-  if (remoteJob?.base !== base) detachRemote()
-  root = base
-  opened.add(base)
-  await fs.mkdir(meta(), { recursive: true })
-  await resumeRemote(base)
-  let project = await readJson(meta('project.json'))
-  if (!project) {
-    // Existing LabelMe folders open with their classes already in place
-    const labels = new Set<string>()
-    read.forEach(({ doc }) => doc?.shapes?.forEach((s: any) => s.label && labels.add(s.label)))
-    const classes = labels.size ? [...labels].sort() : ['object']
-    project = {
-      name: path.basename(root),
-      classes: classes.map((name, i) => ({ name, color: PALETTE[i % PALETTE.length] }))
-    }
-    await writeAtomic(meta('project.json'), JSON.stringify(project, null, 2))
-  }
-  return { root, project, images }
-}
-
-async function openImage(name: string) {
-  const file = inProject(name)
-  const stat = await fs.stat(file)
-  const started = Date.now()
-  const info = await sharp(file, { limitInputPixels: false }).metadata()
-  // EXIF orientations 5-8 swap the sides, and the browser shows photos upright
-  const swapped = (info.orientation ?? 1) >= 5
-  const width = swapped ? info.height! : info.width!
-  const height = swapped ? info.width! : info.height!
-  const browserReadable = ['jpeg', 'png'].includes(info.format ?? '')
-  if (browserReadable && Math.max(width, height) <= DIRECT_MAX) {
-    return { width, height, file, pyramid: null, ms: Date.now() - started }
-  }
-  // Large or TIFF/BMP: build a tile pyramid once and reuse it until the file changes
-  const key = `${name.replace(/[^\w.-]/g, '_')}-${stat.size}-${Math.floor(stat.mtimeMs)}`
-  const dir = meta('cache', key)
-  if (!existsSync(path.join(dir, 'done'))) {
-    await fs.rm(dir, { recursive: true, force: true })
-    await fs.mkdir(dir, { recursive: true })
-    await sharp(file, { limitInputPixels: false })
-      .rotate()
-      .toColourspace('srgb')
-      .jpeg({ quality: 92 })
-      .tile({ size: TILE, overlap: 0, layout: 'dz' })
-      .toFile(path.join(dir, 't'))
-    await fs.writeFile(path.join(dir, 'done'), '')
-  }
-  const maxLevel = Math.ceil(Math.log2(Math.max(width, height)))
-  return {
-    width, height, file, ms: Date.now() - started,
-    pyramid: { dir: path.join(dir, 't_files'), maxLevel, tile: TILE }
+    // Not worth stopping for
   }
 }
-
-function run(cmd: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(cmd, args, { maxBuffer: 1 << 26 }, (err, stdout, stderr) => {
-      if (err) reject(new Error(stderr.trim().split('\n').pop() || err.message))
-      else resolve(stdout)
-    })
-  })
-}
-const ssh = (host: string, command: string) => run('ssh', [...SSH_OPTS, host, command])
-const rsync = (...args: string[]) => run('rsync', ['-a', '-e', ['ssh', ...SSH_OPTS].join(' '), ...args])
-
-async function checkRemote(host: string, dir: string) {
-  const out = await ssh(host, `mkdir -p ${dir} && cd ${dir} && df -Pk . | tail -1 | awk '{print $4}'; ` +
-    `nvidia-smi --query-gpu=name,memory.free,memory.total --format=csv,noheader 2>/dev/null | head -1; ` +
-    `nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | wc -l; ` +
-    `python3 -c 'import torch;print(torch.__version__, torch.cuda.is_available())' 2>&1 | tail -1`)
-  const [free, gpu, jobs, torch] = out.trim().split('\n')
-  return { freeKb: Number(free), gpu: gpu ?? '', gpuJobs: Number(jobs), torch: torch ?? '' }
-}
-
-async function startRemote(options: any, target: { host: string; dir: string }) {
-  const { host, dir } = target
-  const log = (line: string) => send('train:log', line + '\n')
-  log(`Checking ${host}…`)
-  const remote = await checkRemote(host, dir)
-  if (!/ True$/.test(remote.torch)) throw new Error(`No GPU PyTorch on ${host}: ${remote.torch}`)
-  if (remote.gpuJobs > 0) throw new Error(`The GPU on ${host} is busy with ${remote.gpuJobs} other job(s).`)
-
-  log('Preparing dataset…')
-  await engine(['prepare', root, '--val-split', String(options.val_split), '--tile', String(options.tile)])
-  const sizeKb = Number((await run('du', ['-sk', meta('dataset')])).split('\t')[0])
-  if (remote.freeKb < sizeKb + REMOTE_RESERVE_KB) {
-    const gb = (kb: number) => (kb / 1048576).toFixed(1)
-    throw new Error(`Not enough disk on ${host}: ${gb(remote.freeKb)} GB free, need ${gb(sizeKb + REMOTE_RESERVE_KB)} GB.`)
-  }
-
-  const name = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').slice(0, 15)
-  const project = `${dir}/projects/${name}`
-  log('Sending code…')
-  await ssh(host, `mkdir -p ${dir}/code`)
-  await rsync('--delete', '--exclude=__pycache__', ...['engine', 'scripts', 'src', 'configs'].map((d) => path.join(REPO, d)), `${host}:${dir}/code/`)
-  log('Setting up the environment if needed…')
-  await ssh(host, `cd ${dir} && python3 code/engine/remote_setup.py venv`)
-  await ssh(host, `mkdir -p ${project}/.myseg/runs/${name}`)
-  log(`Uploading dataset (${(sizeKb / 1024).toFixed(0)} MB)…`)
-  await rsync(meta('dataset'), meta('project.json'), `${host}:${project}/.myseg/`)
-
-  const runDir = meta('runs', name)
-  await fs.mkdir(runDir, { recursive: true })
-  await fs.writeFile(path.join(runDir, 'options.json'), JSON.stringify({ ...options, target }, null, 2))
-  await fs.writeFile(path.join(runDir, 'events.jsonl'), '')
-  const absolute = (await ssh(host, `cd ${project} && pwd`)).trim()
-  const remoteRun = `.myseg/runs/${name}`
-  const pid = Number((await ssh(host,
-    `cd ${dir}/code && { setsid nohup ../venv/bin/python -u engine/studio.py train ${quote(absolute)} ` +
-    `--options ${quote(JSON.stringify(options))} --prepared --run ${name} ` +
-    `> ${quote(absolute)}/${remoteRun}/out.log 2>&1 < /dev/null & echo $!; }`)).trim())
-  const info: RemoteInfo = { host, dir, project, pid, fetched: false }
-  await fs.writeFile(path.join(runDir, 'remote.json'), JSON.stringify(info))
-  attachRemote(root, name, info)
-  return name
-}
-
-function attachRemote(base: string, name: string, info: RemoteInfo, events = 0) {
-  remoteJob = { base, run: name, info, events, log: 0, polling: false, lost: false, stopped: false, timer: setInterval(pollRemote, 3000) }
-  pollRemote()
-}
-
-// A run still going trains on without us and reattaches when its folder opens. Work still on
-// its way sees remoteJob has changed and stops, leaving what it didn't save to be read again then.
-function detachRemote() {
-  if (!remoteJob) return
-  clearInterval(remoteJob.timer)
-  remoteJob = null
-}
-
-// Counted once saved, so events that didn't reach the disk are read again
-async function saveEvents(j: RemoteJob, text: string) {
-  const file = metaIn(j.base, 'runs', j.run, 'events.jsonl')
-  await fs.appendFile(file, text)
-  j.events += Buffer.byteLength(text)
-  sendEvents(j.run, await fs.readFile(file, 'utf8'))
-}
-
-// An event, so the message stays with the run
-const saveFailure = (j: RemoteJob, message: string) => saveEvents(j, JSON.stringify({ type: 'error', message }) + '\n')
-
-async function markFetched(j: RemoteJob) {
-  j.info.fetched = true
-  await fs.writeFile(metaIn(j.base, 'runs', j.run, 'remote.json'), JSON.stringify(j.info))
-}
-
-async function pollRemote() {
-  const j = remoteJob
-  if (!j || j.polling) return
-  j.polling = true
-  const { host, project, pid } = j.info
-  const dirOf = `${project}/.myseg/runs/${j.run}`
-  try {
-    const out = await ssh(host, `if cd ${dirOf} 2>/dev/null; then kill -0 ${pid} 2>/dev/null && S=alive || S=dead; ` +
-      `tail -c +${j.events + 1} events.jsonl 2>/dev/null; echo @@SEP; tail -c +${j.log + 1} out.log 2>/dev/null; echo @@SEP; echo $S; ` +
-      `else echo @@SEP; echo @@SEP; echo gone; fi`)
-    if (remoteJob !== j) return
-    const [eventText, logText, answer] = out.split('@@SEP\n')
-    const state = answer.trim()
-    const end = eventText.lastIndexOf('\n')
-    if (end >= 0) await saveEvents(j, eventText.slice(0, end + 1))
-    if (remoteJob !== j) return
-    // A run that's over stays "lost" until its model is back, so a failure is told once, not every retry
-    if (state === 'alive') {
-      if (j.lost) send('train:log', 'Connection back.\n')
-      j.lost = false
-    }
-    if (logText) {
-      j.log += Buffer.byteLength(logText)
-      send('train:log', logText)
-    }
-    if (state === 'dead') await finishRemote(j)
-    if (state === 'gone') await abandonRemote(j)
-  } catch (e: any) {
-    // Training goes on without us; keep trying until the box answers again
-    if (remoteJob === j && !j.lost) send('train:log', `Connection lost, training continues on ${host}. Retrying… (${e.message})\n`)
-    j.lost = true
-  } finally {
-    j.polling = false
-  }
-}
-
-async function finishRemote(j: RemoteJob) {
-  const { host, project } = j.info
-  const local = metaIn(j.base, 'runs', j.run)
-  // One read after the process ended, so the last events aren't lost. A run that died early has no file.
-  const rest = await ssh(host, `tail -c +${j.events + 1} ${project}/.myseg/runs/${j.run}/events.jsonl 2>/dev/null || true`)
-  if (remoteJob !== j) return
-  if (rest.trim()) await saveEvents(j, rest)
-  if (remoteJob !== j) return
-  if (!j.lost) send('train:log', 'Bringing the model back…\n')
-  await rsync('--exclude=checkpoint_*', '--exclude=events.jsonl', '--exclude=options.json',
-    `${host}:${project}/.myseg/runs/${j.run}/`, `${local}/`)
-  // Reattaching does this over, and only the attached job may go on to remove the remote copy
-  if (remoteJob !== j) return
-  if (!j.events && !j.stopped) {
-    await saveFailure(j, `Training on ${host} ended before it reported anything. Its output is in the log, and in out.log in the run's folder.`)
-  }
-  await markFetched(j)
-  // The run is safe here now; its copy on the remote disk isn't needed
-  await ssh(host, `rm -rf ${quote(project)}`)
-  if (remoteJob !== j) return
-  send('train:log', 'Remote copy removed.\n')
-  // Polling stops only now: if any of this failed, the next poll tries again
-  detachRemote()
-  send('train:exit', { run: j.run, code: 0 })
-}
-
-// Its files have left the machine, so there's nothing to wait for or bring back. If the
-// model is already here, this is just a removal whose answer never reached us.
-async function abandonRemote(j: RemoteJob) {
-  if (!j.info.fetched) {
-    await saveFailure(j, `This run's files are no longer on ${j.info.host}, so its model can't be brought back.`)
-    await markFetched(j)
-  }
-  if (remoteJob !== j) return
-  detachRemote()
-  send('train:exit', { run: j.run, code: 0 })
-}
-
-// A run can outlive the app or a visit to another folder: pick it up again when its project opens
-async function resumeRemote(base: string) {
-  if (remoteJob) return
-  const dir = metaIn(base, 'runs')
-  if (!existsSync(dir)) return
-  for (const name of await fs.readdir(dir)) {
-    const info: RemoteInfo | null = await readJson(path.join(dir, name, 'remote.json'))
-    if (info && !info.fetched) {
-      const seen = await fs.stat(path.join(dir, name, 'events.jsonl')).then((s) => s.size).catch(() => 0)
-      // Reading takes time, and another folder may have opened meanwhile
-      if (root === base && !remoteJob) attachRemote(base, name, info, seen)
-      return
-    }
-  }
-}
-
-function engine(args: string[]): Promise<any> {
-  return new Promise((resolve, reject) => {
-    execFile(PYTHON, [ENGINE, ...args], { cwd: REPO, maxBuffer: 1 << 28 }, (err, stdout, stderr) => {
-      if (err) reject(new Error(stderr.trim().split('\n').pop() || err.message))
-      else resolve(JSON.parse(stdout.trim().split('\n').pop()!))
-    })
-  })
-}
-
-async function listRuns() {
-  const dir = meta('runs')
-  const names = existsSync(dir) ? (await fs.readdir(dir)).sort().reverse() : []
-  return Promise.all(
-    names.map(async (name) => {
-      const raw = await fs.readFile(path.join(dir, name, 'events.jsonl'), 'utf8').catch(() => '')
-      return {
-        name, events: parseEvents(raw),
-        options: await readJson(path.join(dir, name, 'options.json')),
-        running: job?.run === name || remoteJob?.run === name
-      }
-    })
-  )
-}
-
-// What a finished run printed: a remote run's whole output, or else the training log every run keeps
-async function runLog(name: string) {
-  const dir = path.join(meta('runs'), path.basename(name))
-  const output = await fs.readFile(path.join(dir, 'out.log'), 'utf8').catch(() => null)
-  if (output !== null) return output
-  for (const sub of (await fs.readdir(dir).catch(() => [] as string[])).filter((f) => f.startsWith('run_'))) {
-    const logs = (await fs.readdir(path.join(dir, sub)).catch(() => [] as string[])).filter((f) => f.endsWith('.log'))
-    if (logs.length) return fs.readFile(path.join(dir, sub, logs[0]), 'utf8')
-  }
-  return ''
+function addRecent(target: string) {
+  const state = readState()
+  state.recent = [target, ...state.recent.filter((r) => r !== target)].slice(0, 10)
+  writeState(state)
 }
 
 function send(channel: string, payload: unknown) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
 }
 
-// A last line still being written isn't an event yet
-const parseEvents = (raw: string) =>
-  raw.slice(0, raw.lastIndexOf('\n') + 1).split('\n').filter(Boolean).map((l) => JSON.parse(l))
-
-// The run's whole list each time: the window reads the file as well, whenever it likes,
-// so it can't tell which of a few new events it already has
-const sendEvents = (run: string, raw: string) => send('train:events', { run, events: parseEvents(raw) })
-
-async function launch(options: any, target: { host: string; dir: string } | null) {
-  if (job || remoteJob || launching) throw new Error('A training run is already active')
-  launching = true
-  try {
-    return await (target ? startRemote(options, target) : startTraining(options))
-  } finally {
-    launching = false
-  }
-}
-
-function startTraining(options: unknown) {
-  const proc = spawn(PYTHON, [ENGINE, 'train', root, '--options', JSON.stringify(options)], {
-    cwd: REPO, detached: true, env: { ...process.env, PYTHONUNBUFFERED: '1' }
-  })
-  return new Promise<string>((resolve, reject) => {
-    let pending = ''
-    const onLog = (chunk: Buffer) => {
-      const text = chunk.toString()
-      send('train:log', text)
-      if (job) return
-      pending += text
-      const found = pending.match(/\{"run": "([^"]+)"\}/)
-      if (!found) return
-      const current = { proc, base: root, run: found[1], offset: 0, timer: setInterval(pollEvents, 1000) }
-      job = current
-      resolve(found[1])
-    }
-    proc.stdout!.on('data', onLog)
-    proc.stderr!.on('data', onLog)
-    proc.on('error', reject)
-    proc.on('exit', async (code) => {
-      if (!job) return reject(new Error(pending.trim().split('\n').pop() || `Engine exited with ${code}`))
-      await pollEvents()
-      clearInterval(job.timer)
-      const run = job.run
-      job = null
-      send('train:exit', { run, code })
-    })
-  })
-}
-
-async function pollEvents() {
-  const j = job
-  if (!j) return
-  const raw = await fs.readFile(metaIn(j.base, 'runs', j.run, 'events.jsonl'), 'utf8').catch(() => '')
-  const end = raw.lastIndexOf('\n') + 1
-  if (end <= j.offset) return
-  j.offset = end
-  sendEvents(j.run, raw)
-}
-
-function stopLocal() {
-  if (job?.proc.pid) process.kill(-job.proc.pid, 'SIGTERM')
-}
-
-// A local run may have started from another folder, so an attached remote run is the one on screen
-async function stopTraining() {
-  if (!remoteJob) return stopLocal()
-  remoteJob.stopped = true
-  await ssh(remoteJob.info.host, `kill -TERM -${remoteJob.info.pid}`)
-}
-
-async function writeLabels(file: string, name: string, shapes: any[], size: number[]) {
-  // LabelMe format, so LabelMeV2 opens the same files
-  const doc = (await readLabels(file)) ?? { version: '5.5.0', flags: {} }
-  Object.assign(doc, {
-    shapes, imagePath: name, imageData: null, imageWidth: size[0], imageHeight: size[1]
-  })
-  await writeAtomic(file, JSON.stringify(doc, null, 2))
-}
-
-async function predictOne(runName: string, images: string[]) {
-  const lines = (await run(PYTHON, [ENGINE, 'predict', root, '--run', runName, '--images', ...images])).trim().split('\n')
-  const results: Record<string, any[]> = {}
-  let device = ''
-  for (const line of lines.filter((l) => l.startsWith('{')).map((l) => JSON.parse(l))) {
-    if (line.device) device = line.device
-    if (line.error) throw new Error(line.error)
-    if (line.name) results[line.name] = line.shapes
-  }
-  return { device, results }
-}
-
-// Saves as it goes, so stopping keeps what's done. Images someone has labelled are left alone.
-function prelabelAll(runName: string, names: string[]) {
-  if (prelabelJob) throw new Error('Pre-labelling is already running')
-  names.forEach(inProject)
-  const base = root
-  const proc = spawn(PYTHON, [ENGINE, 'predict', root, '--run', runName], {
-    cwd: REPO, detached: true, env: { ...process.env, PYTHONUNBUFFERED: '1' }
-  })
-  const current: PrelabelJob = { proc, stopped: false }
-  prelabelJob = current
-  const failed: string[] = []
-  let done = 0, pending = '', errors = ''
-  let queue = Promise.resolve()
-
-  const onResult = async (r: { name: string; shapes?: any[]; size?: number[]; error?: string }) => {
-    if (prelabelJob !== current) return
-    let shapes: any[] | null = null
-    if (r.error) {
-      failed.push(`${r.name}: ${r.error}`)
-    } else {
-      shapes = await serial(async () => {
-        const file = sidecar(r.name, base)
-        const existing: any[] = (await readLabels(file))?.shapes ?? []
-        if (existing.some((s) => !s.flags?.ai)) return null
-        if (r.shapes!.length || existing.length) await writeLabels(file, r.name, r.shapes!, r.size!)
-        return r.shapes!
-      }).catch((e) => {
-        failed.push(`${r.name}: ${e.message}`)
-        return null
-      })
-    }
-    done++
-    send('prelabel:progress', { name: r.name, shapes, done, total: names.length })
-  }
-
-  return new Promise<{ done: number; total: number; stopped: boolean; failed: string[]; error?: string }>((resolve, reject) => {
-    proc.stdout!.on('data', (chunk: Buffer) => {
-      pending += chunk.toString()
-      const lines = pending.split('\n')
-      pending = lines.pop()!
-      for (const line of lines) {
-        if (line.startsWith('{"name"')) queue = queue.then(() => onResult(JSON.parse(line)))
-      }
-    })
-    proc.stderr!.on('data', (chunk: Buffer) => { errors = (errors + chunk.toString()).slice(-2000) })
-    proc.stdin!.on('error', () => {})
-    proc.on('error', (e) => {
-      if (prelabelJob === current) prelabelJob = null
-      reject(e)
-    })
-    proc.on('close', async (code, signal) => {
-      await queue
-      if (prelabelJob === current) prelabelJob = null
-      const crashed = code !== 0 && !current.stopped
-      const reason = errors.trim().split('\n').pop()
-      const error = crashed ? `Engine stopped (${signal ?? code})${reason ? `: ${reason}` : ''}` : undefined
-      if (crashed && !done) reject(new Error(error))
-      else resolve({ done, total: names.length, stopped: current.stopped || crashed, failed, error })
-    })
-    proc.stdin!.end(JSON.stringify(names))
-  })
-}
-
-function stopPrelabel() {
-  if (!prelabelJob?.proc.pid) return
-  prelabelJob.stopped = true
-  try {
-    process.kill(-prelabelJob.proc.pid, 'SIGTERM')
-  } catch {
-    // Already gone
-  }
+async function open(target: string, output: string | null) {
+  const project = await openProject(target, output)
+  addRecent(target)
+  win?.setTitle(`${path.basename(project.root)} - ${NAME}`)
+  // Counts and broken files arrive after the list, so a big folder opens at once
+  summarizeAll(project.root, (batch) => send('project:summaries', batch)).catch((e) =>
+    send('app:error', `Some label files couldn't be read: ${e.message}`)
+  )
+  return project
 }
 
 function registerIpc() {
-  ipcMain.handle('project:pick', async () => {
-    const result = await dialog.showOpenDialog(win!, {
-      title: 'Open image folder', properties: ['openDirectory']
-    })
-    return result.canceled ? null : openProject(result.filePaths[0])
+  ipcMain.handle('app:start', () => ({
+    config: loaded?.config ?? null,
+    configError,
+    configFile: loaded?.file ?? null,
+    warnings: loaded?.warnings ?? [],
+    version: app.getVersion(),
+    platform: process.platform,
+    filename: args.filename ? path.resolve(args.filename) : null,
+    output: args.output ? path.resolve(args.output) : null,
+    recent: readState().recent.filter((r) => existsSync(r))
+  }))
+  ipcMain.handle('dialog:folder', async (_e, title?: string) => {
+    const r = await dialog.showOpenDialog(win!, { title: title ?? 'Open folder', properties: ['openDirectory', 'createDirectory'] })
+    return r.canceled ? null : r.filePaths[0]
   })
-  ipcMain.handle('project:open', (_e, dir: string) => openProject(dir))
-  ipcMain.handle('project:save', (_e, project) =>
-    writeAtomic(meta('project.json'), JSON.stringify(project, null, 2))
-  )
-  ipcMain.handle('image:open', (_e, name: string) => openImage(name))
-  // Through the same queue as saves, so a load always sees the save sent before it
-  ipcMain.handle('labels:load', (_e, base: string, name: string) => {
-    const file = labelFile(base, name)
-    return serial(async () => (await readLabels(file))?.shapes ?? [])
+  ipcMain.handle('dialog:file', async (_e, title: string, filters: Electron.FileFilter[]) => {
+    const r = await dialog.showOpenDialog(win!, { title, properties: ['openFile'], filters })
+    return r.canceled ? null : r.filePaths[0]
   })
-  ipcMain.handle('labels:save', (_e, base: string, name: string, shapes: any[], size: number[]) => {
-    const file = labelFile(base, name)
-    return serial(() => writeLabels(file, name, shapes, size))
+  ipcMain.handle('dialog:save', async (_e, title: string, defaultPath: string) => {
+    const r = await dialog.showSaveDialog(win!, { title, defaultPath, filters: [{ name: 'Label files', extensions: ['json'] }] })
+    return r.canceled ? null : r.filePath
   })
-  ipcMain.handle('runs:list', listRuns)
-  ipcMain.handle('runs:log', (_e, name: string) => runLog(name))
-  ipcMain.handle('train:start', (_e, options, target) => launch(options, target))
-  ipcMain.handle('remote:check', (_e, host: string, dir: string) => checkRemote(host, dir))
-  ipcMain.handle('train:stop', stopTraining)
-  ipcMain.handle('train:active', () => remoteJob?.run ?? job?.run ?? null)
-  ipcMain.handle('dataset:check', (_e, val: number, tile: number) =>
-    engine(['prepare', root, '--val-split', String(val), '--tile', String(tile)])
-  )
-  ipcMain.handle('model:predict', (_e, runName: string, images: string[]) => predictOne(runName, images))
-  ipcMain.handle('prelabel:start', (_e, runName: string, names: string[]) => prelabelAll(runName, names))
-  ipcMain.handle('prelabel:stop', stopPrelabel)
+  ipcMain.handle('dialog:ask', async (_e, message: string, detail: string, buttons: string[]) => {
+    const r = await dialog.showMessageBox(win!, { type: 'question', message, detail, buttons, defaultId: 0, cancelId: buttons.length - 1, noLink: true })
+    return r.response
+  })
+  ipcMain.handle('project:open', (_e, target: string, output: string | null) => open(target, output))
+  ipcMain.handle('project:close', (_e, root: string) => closeProject(root))
+  ipcMain.handle('project:save', (_e, root: string, project: ProjectInfo) => saveProjectFile(root, project))
+  ipcMain.handle('image:open', (_e, root: string, name: string) => openImage(root, name))
+  ipcMain.handle('labels:load', (_e, root: string, name: string) => loadLabels(root, name))
+  ipcMain.handle('labels:save', async (_e, root: string, name: string, req: SaveRequest & { storeData?: boolean }) => {
+    const data = req.storeData ? await imageData(root, name) : null
+    return saveLabels(root, name, { ...req, imageData: data })
+  })
+  ipcMain.handle('labels:path', (_e, root: string, name: string) => labelPath(root, name))
+  // labelme deletes the file. It goes to the trash here, so a slip can be undone.
+  ipcMain.handle('labels:trash', async (_e, root: string, name: string) => {
+    const file = labelPath(root, name)
+    if (existsSync(file)) await shell.trashItem(file)
+    return file
+  })
+  ipcMain.handle('file:reveal', (_e, root: string, name: string) => shell.showItemInFolder(imagePath(root, name)))
+  ipcMain.handle('config:open', async () => {
+    const file = loaded?.file ?? USER_CONFIG
+    if (!existsSync(file)) await fs.writeFile(file, '')
+    const error = await shell.openPath(file)
+    if (error) throw new Error(error)
+  })
+  ipcMain.handle('app:link', (_e, url: string) => {
+    if (/^https:\/\//.test(url)) return shell.openExternal(url)
+  })
 }
 
-app.whenReady().then(() => {
-  protocol.handle('myseg', (request) => {
-    const file = path.resolve(decodeURIComponent(new URL(request.url).pathname.slice(1)))
-    if (!root || !file.startsWith(root + path.sep)) return new Response('Forbidden', { status: 403 })
-    return net.fetch(pathToFileURL(file).toString())
-  })
-  registerIpc()
+function buildMenu() {
+  // The window has its own menu bar. A Mac still needs the app menu, and Edit for text fields.
+  if (process.platform !== 'darwin') return Menu.setApplicationMenu(null)
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { role: 'appMenu' },
+    { role: 'editMenu' },
+    { role: 'windowMenu' }
+  ]))
+}
+
+function createWindow() {
+  const state = readState()
   win = new BrowserWindow({
-    width: 1500, height: 940, minWidth: 1000, minHeight: 640,
-    backgroundColor: '#14161a', autoHideMenuBar: true, title: 'Seamline',
+    width: state.bounds?.width ?? 1500, height: state.bounds?.height ?? 940, x: state.bounds?.x, y: state.bounds?.y,
+    minWidth: 960, minHeight: 600, backgroundColor: '#14161a', title: NAME, show: false,
     icon: path.join(__dirname, '../../resources/icon.png'),
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: false }
   })
-  // Saves wait a moment after each change: let the last one reach the disk before closing
-  let flushed = false
+  if (state.maximized) win.maximize()
+  win.once('ready-to-show', () => win?.show())
+  // Saves wait a moment after each change: the window flushes them, or asks about unsaved
+  // work when saving isn't automatic, before it closes
+  let closing = false
   win.on('close', (e) => {
-    if (flushed || !root) return
+    if (closing || !win) return
     e.preventDefault()
-    const close = () => {
-      if (flushed) return
-      flushed = true
-      win?.close()
+    const finish = (ok: boolean) => {
+      if (!ok || closing || !win) return
+      closing = true
+      const s = readState()
+      s.maximized = win.isMaximized()
+      if (!s.maximized) s.bounds = win.getBounds()
+      writeState(s)
+      win.close()
     }
-    ipcMain.once('app:flushed', close)
-    setTimeout(close, 3000)
+    ipcMain.once('app:flushed', (_e, ok: boolean) => finish(ok))
     send('app:flush', null)
   })
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https:\/\//.test(url)) shell.openExternal(url)
+    return { action: 'deny' }
+  })
   if (process.env.ELECTRON_RENDERER_URL) win.loadURL(process.env.ELECTRON_RENDERER_URL)
-  else {
-    const project = process.env.MYSEG_PROJECT
-    win.loadFile(path.join(__dirname, '../renderer/index.html'), project ? { query: { project } } : {})
+  else win.loadFile(path.join(__dirname, '../renderer/index.html'))
+}
+
+app.whenReady().then(async () => {
+  setCacheDir(path.join(app.getPath('userData'), 'cache'))
+  if (args.resetConfig) {
+    // labelme forgets its Qt settings; here that's the layout, recent files and app settings
+    await fs.rm(statePath(), { force: true })
+    await fs.rm(path.join(app.getPath('userData'), 'Local Storage'), { recursive: true, force: true })
+    process.stdout.write('Settings were reset.\n')
+    app.exit(0)
+    return
   }
+  try {
+    loaded = loadConfig(args)
+  } catch (e: any) {
+    configError = e.message
+  }
+  protocol.handle('myseg', async (request) => {
+    const file = path.resolve(decodeURIComponent(new URL(request.url).pathname.slice(1)))
+    const allowed = [...rootsOpen(), cacheRoot()].some((dir) => dir && file.startsWith(dir + path.sep))
+    if (!allowed) return new Response('Forbidden', { status: 403 })
+    // Shared with the page's own origin, so drawing an image leaves the canvas readable
+    const response = await net.fetch(pathToFileURL(file).toString())
+    const headers = new Headers(response.headers)
+    headers.set('Access-Control-Allow-Origin', '*')
+    return new Response(response.body, { status: response.status, headers })
+  })
+  registerIpc()
+  buildMenu()
+  createWindow()
 })
 
-// Local runs end with the app; remote ones keep going and reattach on next open
-app.on('window-all-closed', () => {
-  stopLocal()
-  stopPrelabel()
-  app.quit()
-})
+app.on('window-all-closed', () => app.quit())

@@ -1,5 +1,6 @@
 import ClipperLib from 'clipper-lib'
-import type { Shape } from './types'
+import { accepted, newShape, type Shape } from '../../shared/labelfile'
+import { outline } from './shapes'
 
 type Path = { X: number; Y: number }[]
 export type Region = Path[]
@@ -10,17 +11,8 @@ const SCALE = 100
 // Smaller specks and pinholes come from stroke edges, not from anything drawn on purpose
 const MIN_AREA = 4
 
-export function outline(s: Shape): number[][] {
-  if (s.shape_type !== 'rectangle') return s.points
-  const [[a, b], [c, d]] = s.points
-  return [[a, b], [c, b], [c, d], [a, d]]
-}
-
-export function accepted(s: Shape): Shape {
-  const { score: _score, flags, ...rest } = s
-  const { ai: _ai, ...others } = flags ?? {}
-  return { ...rest, flags: others }
-}
+// Paint and cuts work on areas, so only area shapes take part: masks, lines and points don't
+export const paintable = (s: Shape) => ['polygon', 'rectangle', 'circle'].includes(s.shape_type) && !s.hidden
 
 const toPath = (points: number[][]): Path =>
   points.map(([x, y]) => ({ X: Math.round(x * SCALE), Y: Math.round(y * SCALE) }))
@@ -62,7 +54,7 @@ export function strokeRegion(points: number[][], radius: number, tolerance: numb
 }
 
 const overlaps = (region: Region, s: Shape) =>
-  flat(combine(ClipperLib.ClipType.ctIntersection, solid(s), region)).length > 0
+  paintable(s) && flat(combine(ClipperLib.ClipType.ctIntersection, solid(s), region)).length > 0
 
 // LabelMe polygons have no holes: a hole joins its outer ring through a zero-width cut.
 // Everything that reads these files (canvas, PIL, LabelMe) fills them even-odd.
@@ -103,7 +95,7 @@ export function paintShapes(shapes: Shape[], region: Region, label: string): Sha
   offset.Execute(reach, SCALE)
   const touched = shapes.filter((s) => s.label === label && overlaps(reach, s))
   const merged = combine(ClipperLib.ClipType.ctUnion, [...region, ...touched.flatMap(solid)])
-  const base = touched[0] ? accepted(touched[0]) : { label, flags: {} }
+  const base = touched[0] ? accepted(touched[0]) : newShape(label, 'polygon', [])
   const pieces = parts(merged).map((points) => ({ ...base, shape_type: 'polygon' as const, points }))
   // Later shapes win in training: a shape keeps its layer, so growing it can't cover another class
   if (!touched.length) return [...shapes, ...pieces]

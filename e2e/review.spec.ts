@@ -1,20 +1,12 @@
-import { _electron as electron, expect, test } from '@playwright/test'
-import { execFileSync } from 'child_process'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { expect, test } from '@playwright/test'
+import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import path from 'path'
 import sharp from 'sharp'
+import { BASE, drag as dragOn, H, labelAt, launch, onImage as onImageOf, read as readDoc, square, W } from './helpers'
 
-const REPO = path.resolve(__dirname, '../..')
-const DIR = process.env.E2E_REVIEW_DIR || '/tmp/myseg-e2e-review'
+const DIR = path.join(BASE, 'review')
 const SHOTS = process.env.E2E_SHOTS || DIR
-const W = 400, H = 300
 
-const square = (label: string, x0: number, y0: number, x1: number, y1: number, score?: number) => ({
-  label, shape_type: 'polygon', group_id: null, description: '',
-  points: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
-  flags: score === undefined ? {} : { ai: true },
-  ...(score === undefined ? {} : { score })
-})
 const FILES: Record<string, any[] | null> = {
   a: [square('cat', 20, 20, 80, 80, 0.9), square('cat', 200, 100, 280, 180, 0.4)],
   b: [square('cat', 30, 30, 90, 90, 0.2)],
@@ -24,15 +16,9 @@ const FILES: Record<string, any[] | null> = {
   f: [square('dog', 111, 111, 171, 171, 0.95)],
   g: [square('dog', 222, 122, 282, 182, 0.96)]
 }
-const read = (name: string) => JSON.parse(readFileSync(path.join(DIR, `${name}.json`), 'utf8')).shapes
-
-// What training would see for this image
-function mask(name: string): number[][] {
-  const code = `import json,sys;sys.path.insert(0,${JSON.stringify(REPO)});from engine.studio import rasterize
-d=json.load(open(${JSON.stringify(path.join(DIR, name + '.json'))}));m=rasterize(d['shapes'],(${W},${H}),{'cat':1,'dog':2})
-print(json.dumps(m.tolist()))`
-  return JSON.parse(execFileSync(path.join(REPO, '.venv/bin/python'), ['-c', code], { maxBuffer: 1 << 26 }).toString())
-}
+const read = (name: string) => readDoc(DIR, name).shapes
+// What a training mask would give these pixels
+const label = (name: string, x: number, y: number) => labelAt(read(name), x, y)
 
 test('review AI shapes, then fix shapes with the brush and eraser', async () => {
   rmSync(DIR, { recursive: true, force: true })
@@ -45,13 +31,8 @@ test('review AI shapes, then fix shapes with the brush and eraser', async () => 
       }))
     }
   }
-  const app = await electron.launch({
-    args: [path.resolve(__dirname, '..')],
-    env: { ...process.env, MYSEG_PROJECT: DIR } as Record<string, string>
-  })
-  const page = await app.firstWindow()
-  const errors: string[] = []
-  page.on('pageerror', (e) => errors.push(e.message))
+  writeFileSync(path.join(DIR, 'classes.txt'), 'cat\ndog\n')
+  const { app, page, errors } = await launch(DIR, ['--labels', path.join(DIR, 'classes.txt')])
 
   const filter = (name: string) => page.locator('.filters button', { hasText: name })
   await expect(filter('All')).toContainText('7')
@@ -62,25 +43,14 @@ test('review AI shapes, then fix shapes with the brush and eraser', async () => 
   await expect(page.locator('.class', { hasText: 'cat' })).toContainText('3')
   await expect(page.getByRole('button', { name: 'Pre-label 5 images' })).toBeVisible()
 
-  const canvas = page.getByTestId('canvas')
-  const onImage = async (x: number, y: number) => {
-    const box = (await canvas.boundingBox())!
-    const scale = Math.min((box.width - 48) / W, (box.height - 48) / H)
-    return [box.x + (box.width - W * scale) / 2 + x * scale, box.y + (box.height - H * scale) / 2 + y * scale] as const
-  }
+  const onImage = (x: number, y: number) => onImageOf(page, x, y, W, H)
   const saved = () => expect(page.getByTestId('save-state')).toHaveText('Saved')
   const open = async (name: string) => {
     await page.locator('.file', { hasText: `${name}.png` }).click()
     await expect(page.locator('.file.on')).toContainText(`${name}.png`)
     await page.waitForTimeout(200)
   }
-  const drag = async (from: number[], to: number[]) => {
-    await page.mouse.move(...await onImage(from[0], from[1]))
-    await page.mouse.down()
-    await page.mouse.move(...await onImage((from[0] + to[0]) / 2, (from[1] + to[1]) / 2), { steps: 8 })
-    await page.mouse.move(...await onImage(to[0], to[1]), { steps: 8 })
-    await page.mouse.up()
-  }
+  const drag = (from: number[], to: number[]) => dragOn(page, from, to)
 
   // Least certain first, by each image's least certain shape
   await page.getByLabel('Order').selectOption('certainty')
@@ -157,9 +127,8 @@ test('review AI shapes, then fix shapes with the brush and eraser', async () => 
   await expect(page.locator('.shape')).toHaveCount(2)
   await saved()
   await expect.poll(() => read('e').length).toBe(2)
-  let m = mask('e')
-  expect(m[150][160]).toBe(1)
-  expect(m[50][350]).toBe(2)
+  expect(label('e', 160, 150)).toBe('cat')
+  expect(label('e', 350, 50)).toBe('dog')
   await page.screenshot({ path: `${SHOTS}/brush.png` })
   await page.keyboard.press('Control+z')
   await expect(page.locator('.shape')).toHaveCount(3)
@@ -172,10 +141,9 @@ test('review AI shapes, then fix shapes with the brush and eraser', async () => 
   await expect(page.locator('.shape')).toHaveCount(3)
   await saved()
   await expect.poll(() => read('e').length).toBe(3)
-  m = mask('e')
-  expect(m[150][160]).toBe(0)
-  expect(m[150][60]).toBe(1)
-  expect(m[150][260]).toBe(1)
+  expect(label('e', 160, 150)).toBe('')
+  expect(label('e', 60, 150)).toBe('cat')
+  expect(label('e', 260, 150)).toBe('cat')
 
   // A hole stays out of the training mask, then painting heals it
   await open('c')
@@ -185,15 +153,14 @@ test('review AI shapes, then fix shapes with the brush and eraser', async () => 
   await saved()
   await expect.poll(() => read('c')[0].points.length).toBeGreaterThan(4)
   expect(read('c')).toHaveLength(1)
-  m = mask('c')
-  expect(m[150][200]).toBe(0)
-  expect(m[60][80]).toBe(1)
+  expect(label('c', 200, 150)).toBe('')
+  expect(label('c', 80, 60)).toBe('cat')
   await page.screenshot({ path: `${SHOTS}/hole.png` })
   await page.keyboard.press('b')
   await page.mouse.click(...await onImage(200, 150))
   await expect(page.locator('.shape')).toHaveCount(1)
   await saved()
-  await expect.poll(() => mask('c')[150][200]).toBe(1)
+  await expect.poll(() => label('c', 200, 150)).toBe('cat')
 
   // Brush with a chosen class on an empty image makes a new shape there
   await open('d')
@@ -208,7 +175,7 @@ test('review AI shapes, then fix shapes with the brush and eraser', async () => 
   // The smallest window: nothing spills out
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1000, 640))
   await page.waitForTimeout(400)
-  writeFileSync(path.join(DIR, 'a.json'), JSON.stringify({ shapes: [square('cat', 20, 20, 80, 80, 0.5)] }))
+  writeFileSync(path.join(DIR, 'a.json'), JSON.stringify({ shapes: [square('cat', 20, 20, 80, 80, 0.5)], imagePath: 'a.png' }))
   await open('b')
   await open('a')
   await page.keyboard.press('w')

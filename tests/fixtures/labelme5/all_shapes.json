@@ -1,0 +1,177 @@
+{
+  "version": "5.9.1",
+  "flags": {
+    "night": true,
+    "blurry": false
+  },
+  "shapes": [
+    {
+      "label": "cat",
+      "points": [
+        [
+          10.0,
+          20.5
+        ],
+        [
+          30.25,
+          20.0
+        ],
+        [
+          30.0,
+          40.125
+        ]
+      ],
+      "group_id": null,
+      "description": "ねこ, sleeping",
+      "shape_type": "polygon",
+      "flags": {
+        "occluded": false
+      },
+      "mask": null
+    },
+    {
+      "label": "dog",
+      "points": [
+        [
+          1.0,
+          2.0
+        ],
+        [
+          50.0,
+          60.0
+        ]
+      ],
+      "group_id": 3,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "ball",
+      "points": [
+        [
+          100.0,
+          100.0
+        ],
+        [
+          110.0,
+          105.0
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "circle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "edge",
+      "points": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          99.9,
+          0.1
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "line",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "tip",
+      "points": [
+        [
+          5.5,
+          6.5
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "point",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "road",
+      "points": [
+        [
+          0.0,
+          50.0
+        ],
+        [
+          20.0,
+          55.0
+        ],
+        [
+          40.0,
+          52.0
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "linestrip",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "blob",
+      "points": [
+        [
+          2.0,
+          1.0
+        ],
+        [
+          9.0,
+          6.0
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "mask",
+      "flags": {},
+      "mask": "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAAAAADbboAnAAAAG0lEQVR4nGNggAJGBgZGBgYGhv9MMBFMBhwAACYKAQh+eFlbAAAAAElFTkSuQmCC"
+    },
+    {
+      "score": 0.873,
+      "label": "cat",
+      "points": [
+        [
+          1.0,
+          1.0
+        ],
+        [
+          9.0,
+          1.0
+        ],
+        [
+          9.0,
+          9.0
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "polygon",
+      "flags": {
+        "ai": true
+      },
+      "mask": null
+    }
+  ],
+  "imagePath": "sub/image.jpg",
+  "imageData": null,
+  "imageHeight": 480,
+  "imageWidth": 640,
+  "reviewer": "jn",
+  "extra": {
+    "a": [
+      1,
+      2
+    ]
+  }
+}

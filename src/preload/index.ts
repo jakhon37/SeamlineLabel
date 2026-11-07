@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer as ipc } from 'electron'
+import { contextBridge, ipcRenderer as ipc, webUtils } from 'electron'
 
 const on = (channel: string) => (fn: (payload: any) => void) => {
   const listener = (_e: unknown, payload: any) => fn(payload)
@@ -7,27 +7,36 @@ const on = (channel: string) => (fn: (payload: any) => void) => {
 }
 
 contextBridge.exposeInMainWorld('api', {
-  pickProject: () => ipc.invoke('project:pick'),
-  openProject: (dir: string) => ipc.invoke('project:open', dir),
-  saveProject: (project: unknown) => ipc.invoke('project:save', project),
-  openImage: (name: string) => ipc.invoke('image:open', name),
+  start: () => ipc.invoke('app:start'),
+  pickFolder: (title?: string) => ipc.invoke('dialog:folder', title),
+  pickFile: (title: string, filters: unknown) => ipc.invoke('dialog:file', title, filters),
+  pickSave: (title: string, defaultPath: string) => ipc.invoke('dialog:save', title, defaultPath),
+  ask: (message: string, detail: string, buttons: string[]) => ipc.invoke('dialog:ask', message, detail, buttons),
+  openProject: (target: string, output: string | null) => ipc.invoke('project:open', target, output),
+  closeProject: (root: string) => ipc.invoke('project:close', root),
+  saveProject: (root: string, project: unknown) => ipc.invoke('project:save', root, project),
+  openImage: (root: string, name: string) => ipc.invoke('image:open', root, name),
   loadLabels: (root: string, name: string) => ipc.invoke('labels:load', root, name),
-  saveLabels: (root: string, name: string, shapes: unknown, size: number[]) =>
-    ipc.invoke('labels:save', root, name, shapes, size),
-  listRuns: () => ipc.invoke('runs:list'),
-  runLog: (name: string) => ipc.invoke('runs:log', name),
-  startTraining: (options: unknown, target: unknown) => ipc.invoke('train:start', options, target),
-  checkRemote: (host: string, dir: string) => ipc.invoke('remote:check', host, dir),
-  stopTraining: () => ipc.invoke('train:stop'),
-  activeRun: () => ipc.invoke('train:active'),
-  checkDataset: (val: number, tile: number) => ipc.invoke('dataset:check', val, tile),
-  predict: (run: string, images: string[]) => ipc.invoke('model:predict', run, images),
-  prelabelAll: (run: string, names: string[]) => ipc.invoke('prelabel:start', run, names),
-  stopPrelabel: () => ipc.invoke('prelabel:stop'),
-  onPrelabel: on('prelabel:progress'),
+  saveLabels: (root: string, name: string, req: unknown) => ipc.invoke('labels:save', root, name, req),
+  labelPath: (root: string, name: string) => ipc.invoke('labels:path', root, name),
+  trashLabels: (root: string, name: string) => ipc.invoke('labels:trash', root, name),
+  reveal: (root: string, name: string) => ipc.invoke('file:reveal', root, name),
+  openConfig: () => ipc.invoke('config:open'),
+  openLink: (url: string) => ipc.invoke('app:link', url),
+  pathForFile: (file: File) => webUtils.getPathForFile(file),
+  onSummaries: on('project:summaries'),
   onFlush: on('app:flush'),
-  flushed: () => ipc.send('app:flushed'),
-  onLog: on('train:log'),
-  onEvents: on('train:events'),
-  onExit: on('train:exit')
+  flushed: (ok: boolean) => ipc.send('app:flushed', ok),
+  onError: on('app:error'),
+  aiModels: () => ipc.invoke('ai:models'),
+  aiDownload: (name: string) => ipc.invoke('ai:download', name),
+  onAiDownload: on('ai:download'),
+  aiSegment: (root: string, name: string, model: string, points: number[][], labels: number[], mode: string) =>
+    ipc.invoke('ai:segment', root, name, model, points, labels, mode),
+  prelabelPick: () => ipc.invoke('prelabel:pick'),
+  prelabelInfo: (path: string) => ipc.invoke('prelabel:info', path),
+  prelabelRun: (root: string, model: string, names: string[], classes: string[]) =>
+    ipc.invoke('prelabel:run', root, model, names, classes),
+  prelabelStop: () => ipc.invoke('prelabel:stop'),
+  onPrelabel: on('prelabel:progress')
 })

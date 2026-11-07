@@ -1,13 +1,12 @@
-import { expect, test } from '@playwright/test'
-import { eraseShapes, outline, paintShapes, strokeRegion } from '../src/renderer/src/geometry'
-import type { Shape } from '../src/renderer/src/types'
+import { expect, test } from 'vitest'
+import { newShape, type Shape } from '../../src/shared/labelfile'
+import { eraseShapes, paintShapes, strokeRegion } from '../../src/renderer/src/geometry'
+import { outline } from '../../src/renderer/src/shapes'
 
 const SIZE = [400, 300]
 const stroke = (points: number[][], radius = 10) => strokeRegion(points, radius, 0.5, SIZE)
-const poly = (label: string, x0: number, y0: number, x1: number, y1: number): Shape => ({
-  label, shape_type: 'polygon', flags: {},
-  points: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
-})
+const poly = (label: string, x0: number, y0: number, x1: number, y1: number): Shape =>
+  newShape(label, 'polygon', [[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
 
 // Even-odd, as the canvas, PIL and LabelMe fill these polygons
 function inRing(p: number[], ring: number[][]) {
@@ -49,13 +48,13 @@ test('painting a shape keeps its layer, so it can\'t cover another class in trai
 })
 
 test('editing an AI shape accepts it', () => {
-  const ai = { ...poly('a', 10, 10, 50, 50), flags: { ai: true }, score: 0.4 }
+  const ai = { ...poly('a', 10, 10, 50, 50), flags: { ai: true }, other: { score: 0.4 } }
   const [painted] = paintShapes([ai], stroke([[50, 30]]), 'a')
-  expect(painted.flags?.ai).toBeUndefined()
-  expect(painted.score).toBeUndefined()
+  expect(painted.flags.ai).toBeUndefined()
+  expect(painted.other.score).toBeUndefined()
   const { shapes: [erased] } = eraseShapes([ai], stroke([[50, 30]]), null)
-  expect(erased.flags?.ai).toBeUndefined()
-  expect(erased.score).toBeUndefined()
+  expect(erased.flags.ai).toBeUndefined()
+  expect(erased.other.score).toBeUndefined()
 })
 
 test('erasing across a shape splits it; with a selection only that shape changes', () => {
@@ -160,4 +159,12 @@ test('random paint and erase sequences match an independent model', () => {
   }
   console.log(`geometry fuzz: ${compared} points checked, slowest stroke ${Math.round(slowest)} ms`)
   expect(compared).toBeGreaterThan(10000)
+})
+
+test('lines, points and masks are left out of paint and cuts', () => {
+  const line = newShape('a', 'line', [[0, 30], [100, 30]])
+  const point = newShape('a', 'point', [[40, 30]])
+  const painted = paintShapes([line, point], stroke([[40, 30]], 20), 'a')
+  expect(painted.slice(0, 2)).toEqual([line, point])
+  expect(eraseShapes([line, point], stroke([[40, 30]], 20), null).shapes).toEqual([line, point])
 })
