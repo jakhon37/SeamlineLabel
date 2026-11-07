@@ -31,7 +31,8 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: End-to-end tests
-        run: npx playwright test --reporter=line
+        # Chromium's GPU process wants a display even for a headless window, and Linux runners have none
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a ' || '' }}npx playwright test --reporter=line
         env:
           E2E_SHOTS: ${{ runner.temp }}/shots
           # Prints the app's own output, which is all there is to go on when a launch fails
@@ -61,7 +62,7 @@ jobs:
       - name: Allow Chromium's sandbox
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Write label files with the app
-        run: npx playwright test e2e/labelme.spec.ts e2e/ai.spec.ts --reporter=line
+        run: xvfb-run -a npx playwright test e2e/labelme.spec.ts e2e/ai.spec.ts --reporter=line
         env:
           E2E_DIR: ${{ runner.temp }}/e2e
       - name: Load them with labelme 7 and labelme 5
