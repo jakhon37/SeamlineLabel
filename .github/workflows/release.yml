@@ -35,13 +35,22 @@ jobs:
       # --version loads sharp and onnxruntime before it answers, so a package missing either fails here
       - name: The packaged app starts
         shell: bash
+        timeout-minutes: 5
         run: |
           case "$RUNNER_OS" in
-            Linux) app=release/linux-unpacked/seamline-label ;;
-            Windows) app="release/win-unpacked/Seamline Label.exe" ;;
-            macOS) app="$(ls -d release/mac*/'Seamline Label.app')/Contents/MacOS/Seamline Label" ;;
+            Linux)
+              # As a user installs it: the .deb adds the AppArmor profile Ubuntu 24.04 wants before Chromium's sandbox may run
+              sudo apt-get update -q > /dev/null
+              sudo apt-get install -y -q ./release/*.deb > /dev/null
+              seamline-label --version
+              # An AppImage can't add one, so on Ubuntu it needs --no-sandbox; elsewhere it runs as it is
+              ./release/*.AppImage --appimage-extract-and-run --no-sandbox --version 2>&1 | grep -o "Seamline Label [0-9][0-9.]*"
+              sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0
+              ./release/*.AppImage --appimage-extract-and-run --version 2>&1 | grep -o "Seamline Label [0-9][0-9.]*"
+              ;;
+            Windows) release/win-unpacked/seamline-label.exe --version ;;
+            macOS) "$(find release -maxdepth 2 -name '*.app' | head -1)"/Contents/MacOS/* --version ;;
           esac
-          "$app" --version
       - uses: actions/upload-artifact@v7
         with:
           name: installers-${{ matrix.os }}

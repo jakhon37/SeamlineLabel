@@ -45,8 +45,8 @@ Download the installer for your system from [Releases](https://github.com/jakhon
 | Windows 10 and 11 | `Seamline-Label-…-win-x64.exe` | Not code-signed yet: on the SmartScreen warning, choose More info, then Run anyway. |
 | macOS on Apple silicon | `Seamline-Label-…-mac-arm64.dmg` | Not notarised yet: right-click the app and choose Open the first time, or run `xattr -cr "/Applications/Seamline Label.app"`. |
 | macOS on Intel | `Seamline-Label-…-mac-x64.dmg` | As above. |
-| Linux | `Seamline-Label-…-linux-amd64.deb` | `sudo apt install ./Seamline-Label-*.deb` adds a `seamline-label` command. |
-| Linux, any distribution | `Seamline-Label-…-linux-x86_64.AppImage` | `chmod +x` it and run it. Ubuntu 22.04 and later need `sudo apt install libfuse2t64` first (`libfuse2` on 22.04). |
+| Linux | `Seamline-Label-…-linux-amd64.deb` | `sudo apt install ./Seamline-Label-*.deb` adds a `seamline-label` command, and on Ubuntu 24.04 and later the AppArmor profile Chromium's sandbox needs. |
+| Linux, any distribution | `Seamline-Label-…-linux-x86_64.AppImage` | `chmod +x` it and run it. On Ubuntu the .deb is simpler: an AppImage can't add that profile, so from 24.04 it needs `--no-sandbox`, and it needs `sudo apt install libfuse2t64` (`libfuse2` on 22.04). |
 
 To build it yourself you need Node 22:
 
