@@ -46,7 +46,7 @@ Download the installer for your system from [Releases](https://github.com/jakhon
 | macOS on Apple silicon | `Seamline-Label-…-mac-arm64.dmg` | Not notarised yet: right-click the app and choose Open the first time, or run `xattr -cr "/Applications/Seamline Label.app"`. |
 | macOS on Intel | `Seamline-Label-…-mac-x64.dmg` | As above. |
 | Linux | `Seamline-Label-…-linux-amd64.deb` | `sudo apt install ./Seamline-Label-*.deb` adds a `seamline-label` command. |
-| Linux, any distribution | `Seamline-Label-…-linux-x86_64.AppImage` | `chmod +x` it and run it. |
+| Linux, any distribution | `Seamline-Label-…-linux-x86_64.AppImage` | `chmod +x` it and run it. Ubuntu 22.04 and later need `sudo apt install libfuse2t64` first (`libfuse2` on 22.04). |
 
 To build it yourself you need Node 22:
 

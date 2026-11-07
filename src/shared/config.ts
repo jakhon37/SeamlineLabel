@@ -236,8 +236,7 @@ export function matches(keys: Keys, e: KeyEventLike, mac: boolean): boolean {
   const ctrl = mac ? e.metaKey : e.ctrlKey
   const meta = mac ? e.ctrlKey : e.metaKey
   if (keys.ctrl !== ctrl || keys.alt !== e.altKey || keys.meta !== meta) return false
-  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase()
-  if (key !== keys.key) return false
+  if (e.key.toLowerCase() !== keys.key) return false
   // Symbols already carry Shift in the key itself ("+" is Shift+=), letters and named keys don't
   const symbol = keys.key.length === 1 && !/[a-z0-9]/.test(keys.key)
   return symbol || keys.shift === e.shiftKey

@@ -422,7 +422,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
               ctx.drawImage(c, x0, y0, c.width * scale, c.height * scale)
               ctx.globalAlpha = 1
             }
-          } else if (settings.fillDrawing || true) ctx.fill('evenodd')
+          } else ctx.fill('evenodd')
           ctx.setLineDash([5, 4])
           ctx.stroke()
           ctx.setLineDash([])
@@ -488,7 +488,8 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     if (!dr || !dr.points.length) return null
     const md = opts.current.mode
     const first = dr.points[0]
-    if (md === 'polygon' || md === 'linestrip') return newShape('', md === 'polygon' ? 'linestrip' : 'linestrip', [...dr.points, p])
+    // Drawn open until it's closed
+    if (md === 'polygon' || md === 'linestrip') return newShape('', 'linestrip', [...dr.points, p])
     if (md === 'rectangle') return newShape('', 'rectangle', [first, shift.current ? squareFrom(first, p) : p])
     if (md === 'circle') return newShape('', 'circle', [first, p])
     if (md === 'line') return newShape('', 'line', [first, p])
@@ -828,7 +829,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       const choice = await askLabel({ text: picked ?? '', flags: null, group_id: null, description: null, at: screenMouse.current })
       if (!choice) {
         // labelme goes back to drawing, so a slip on the last click isn't the end of the shape
-        if (type === 'polygon' || type === 'linestrip') draft.current = { points: points.slice(0, -1).length ? points : points, labels: [], preview: null }
+        if (type === 'polygon' || type === 'linestrip') draft.current = { points, labels: [], preview: null }
         invalidate()
         return
       }
@@ -1369,13 +1370,11 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   }
   const paste = () => {
     if (!clipboard.current.length || readOnlyRef.current || !metaRef.current) return
-    const m = metaRef.current
     // Pasted onto a smaller image, shapes are kept inside it
     const fitIn = clipboard.current.map((s) => ({ ...s, points: s.points.map(clampPoint) }))
     const next = [...shapesRef.current, ...fitIn]
     setShapes(next)
     setSelected(fitIn.map((_, k) => next.length - fitIn.length + k))
-    if (m.width < 1) return
   }
   const duplicate = () => {
     copySelected()
