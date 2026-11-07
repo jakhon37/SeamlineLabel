@@ -199,9 +199,10 @@ test('keep previous annotation, and Ctrl+Shift+D to copy once', async () => {
   await open(page, 'a.png')
   await page.keyboard.press('ControlOrMeta+Shift+d')
   await expect(page.locator('.file.on')).toContainText('b.png')
+  // The list moves to b at once; a's shape and its "Saved" show until b has loaded
+  await expect.poll(() => existsSync(path.join(dir, 'b.json')) && shapesIn(dir, 'b').length).toBe(1)
   await expect(page.locator('.shape')).toHaveCount(1)
   await saved(page)
-  expect(shapesIn(dir, 'b')).toHaveLength(1)
   await page.keyboard.press('d')
   await expect(page.locator('.file.on')).toContainText('c.png')
   await expect(page.locator('.shape')).toHaveCount(0)
