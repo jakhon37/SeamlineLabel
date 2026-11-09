@@ -26,7 +26,9 @@ npmRebuild: false
 extraMetadata:
   main: out/main/index.js
 fileAssociations: []
+# Icons from docs/mark/icons.cjs: each carries the small mark at the sizes where detail would turn to noise
 win:
+  icon: resources/icon.ico
   target:
     - target: nsis
       arch: [x64]
@@ -36,6 +38,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   shortcutName: Seamtag
 mac:
+  icon: resources/icon.icns
   category: public.app-category.graphics-design
   target:
     - target: dmg
@@ -43,6 +46,7 @@ mac:
   identity: "-"
   hardenedRuntime: false
 linux:
+  icon: resources/icons
   category: Graphics
   synopsis: Image labelling in LabelMe format
   description: Label images with polygons, boxes, brush and eraser, AI segmentation and review of model proposals. Saves LabelMe JSON.

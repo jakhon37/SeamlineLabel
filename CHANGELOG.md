@@ -5,6 +5,11 @@ All notable changes to Seamtag, and before it LabelMeV2, are documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- A mark of its own, so Seamtag and Seamline no longer share an icon: Seamline's seam, with cloth in the app's blue in place of the network and a label sewn in. The installers carry a small version where icons are drawn at 32 px and under.
+
 ## [3.0.0] - Seamtag
 
 The labeller of [Seamline](https://github.com/jakhon37/Seamline), on its own, in place of the Qt app.

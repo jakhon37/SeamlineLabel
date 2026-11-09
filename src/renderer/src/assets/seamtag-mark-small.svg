@@ -1,0 +1,18 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><title>Seamtag</title><defs>
+<clipPath id="c"><rect width="512" height="512" rx="116"/></clipPath>
+<clipPath id="l"><path d="M322 -24C230 18 148 72 148 150C148 216 200 236 256 256C312 276 364 296 364 362C364 440 282 494 190 536L-40 536L-40 -24Z"/></clipPath>
+<clipPath id="r"><path d="M322 -24C230 18 148 72 148 150C148 216 200 236 256 256C312 276 364 296 364 362C364 440 282 494 190 536L552 536L552 -24Z"/></clipPath>
+<clipPath id="lb"><path d="M195.5 276.9Q184.2 272.8 188.2 261.5L251.4 84.5Q255.5 73.2 266.8 77.2L360.9 110.8Q372.2 114.9 368.2 126.2L305.0 303.2Q300.9 314.5 289.6 310.5Z"/></clipPath>
+<filter id="b" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="9"/></filter>
+<filter id="bs" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="6"/></filter>
+<filter id="sh" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="6" stdDeviation="7" flood-opacity=".3"/></filter>
+<filter id="m" x="0" y="0" width="1" height="1"><feColorMatrix type="saturate" values="0"/></filter>
+<linearGradient id="duos" x1="0" y1="0" x2=".3" y2="1"><stop offset="0" stop-color="#1d2a44" stop-opacity=".34"/><stop offset="1" stop-color="#1d2a44" stop-opacity=".08"/></linearGradient>
+<linearGradient id="cloth" x1=".3" y1="0" x2=".8" y2="1"><stop offset="0" stop-color="#5c97ff"/><stop offset="1" stop-color="#3f7ae8"/></linearGradient>
+<mask id="st" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512"><path d="M322 -24C230 18 148 72 148 150C148 216 200 236 256 256C312 276 364 296 364 362C364 440 282 494 190 536" fill="none" stroke="#fff" stroke-width="44" stroke-dasharray="20 14"/><path d="M322 -24C230 18 148 72 148 150C148 216 200 236 256 256C312 276 364 296 364 362C364 440 282 494 190 536" fill="none" stroke="#000" stroke-width="30"/></mask>
+</defs><g clip-path="url(#c)">
+<rect width="512" height="512" fill="url(#cloth)"/>
+<g clip-path="url(#l)"><rect width="512" height="512" fill="#f3f5f9"/>
+<path d="M322 -24C230 18 148 72 148 150C148 216 200 236 256 256C312 276 364 296 364 362C364 440 282 494 190 536" fill="none" stroke="#0b2a6b" stroke-opacity=".16" stroke-width="28" transform="translate(-5 4)" filter="url(#bs)"/></g>
+<rect width="512" height="512" rx="116" fill="none" stroke="#8a93a3" stroke-opacity="0.5" stroke-width="28"/>
+</g></svg>

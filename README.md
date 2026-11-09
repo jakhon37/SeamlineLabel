@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/brand/seamline-mark.svg" alt="" width="104">
+  <img src="docs/mark/seamtag-mark.svg" alt="" width="104">
 </p>
 
 <h1 align="center">Seamtag</h1>
