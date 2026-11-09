@@ -232,8 +232,10 @@ test('difficult, the label filter, single class mode, copying the previous image
   await open(page, 'b.png')
   await page.getByRole('menuitem', { name: 'File' }).click()
   await page.getByRole('menuitem', { name: "Copy previous image's shapes" }).click()
+  // It reads a's file first, so the shapes arrive a moment after the click
+  await expect(page.locator('.shape')).toHaveCount(2)
   await saved(page)
-  expect(shapesIn(dir, 'b').map((s: any) => s.label)).toEqual(['cat', 'dog'])
+  await expect.poll(() => existsSync(path.join(dir, 'b.json')) && shapesIn(dir, 'b').map((s: any) => s.label)).toEqual(['cat', 'dog'])
   expect(shapesIn(dir, 'b')[0].flags).toEqual({ difficult: true })
 
   // Single class mode is on: the label picked is used. Off, each new shape asks.
