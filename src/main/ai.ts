@@ -66,7 +66,7 @@ export const MODELS: ModelDef[] = [
 // takes the image as it is, which costs memory
 const MAX_SIDE: Record<Kind, number> = { sam: 4096, sam2: 4096, efficientsam: 2048 }
 
-const cacheDir = () => process.env.SEAMLINE_LABEL_MODELS || path.join(homedir(), '.cache', 'osam', 'models', 'blobs')
+const cacheDir = () => process.env.SEAMTAG_MODELS || path.join(homedir(), '.cache', 'osam', 'models', 'blobs')
 // osam names a blob by its hash, "sha256-…" since Windows can't have ":" in a name.
 // Older osam used the hash as it is, and those downloads are used too.
 export function blobPath(b: Blob) {

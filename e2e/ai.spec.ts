@@ -72,9 +72,9 @@ test("a model's classes must match its outputs", async () => {
   await finish(app, errors)
 })
 
-// Needs efficientsam:10m in SEAMLINE_LABEL_MODELS, about 40 MB, so it's left out by default
+// Needs efficientsam:10m in SEAMTAG_MODELS, about 40 MB, so it's left out by default
 test('AI polygon and AI mask with SAM', async () => {
-  test.skip(!process.env.SEAMLINE_LABEL_MODELS, 'set SEAMLINE_LABEL_MODELS to a folder with efficientsam:10m')
+  test.skip(!process.env.SEAMTAG_MODELS, 'set SEAMTAG_MODELS to a folder with efficientsam:10m')
   const dir = await project('sam', {})
   await discs(dir, 'd', [{ cx: 200, cy: 150, r: 70, color: '#e0a030' }])
   const { app, page, errors } = await launch(dir, ['--labels', 'disc'])

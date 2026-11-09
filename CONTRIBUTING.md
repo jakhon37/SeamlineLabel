@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping. Seamline Label is an Electron app in TypeScript; it needs Node 22.
+Thanks for helping. Seamtag is an Electron app in TypeScript; it needs Node 22.
 
 ```bash
 npm ci
@@ -11,7 +11,7 @@ npm run test:e2e     # builds, then drives the real app (Playwright)
 npm run dist         # the installer for this system, in release/
 ```
 
-On Linux the end-to-end tests run without a window (`--ozone-platform=headless`); set `E2E_SHOW=1` to see them. Each launch gets its own home folder and profile (`SEAMLINE_LABEL_USER_DATA`), so tests never touch your settings. The SAM test needs `SEAMLINE_LABEL_MODELS` set to a folder holding `efficientsam:10m`, as osam keeps it.
+On Linux the end-to-end tests run without a window (`--ozone-platform=headless`); set `E2E_SHOW=1` to see them. Each launch gets its own home folder and profile (`SEAMTAG_USER_DATA`), so tests never touch your settings. The SAM test needs `SEAMTAG_MODELS` set to a folder holding `efficientsam:10m`, as osam keeps it.
 
 ## Where things are
 

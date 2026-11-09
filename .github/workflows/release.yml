@@ -42,13 +42,13 @@ jobs:
               # As a user installs it: the .deb adds the AppArmor profile Ubuntu 24.04 wants before Chromium's sandbox may run
               sudo apt-get update -q > /dev/null
               sudo apt-get install -y -q ./release/*.deb > /dev/null
-              seamline-label --version
+              seamtag --version
               # An AppImage can't add one, so on Ubuntu it needs --no-sandbox; elsewhere it runs as it is
-              ./release/*.AppImage --appimage-extract-and-run --no-sandbox --version 2>&1 | grep -o "Seamline Label [0-9][0-9.]*"
+              ./release/*.AppImage --appimage-extract-and-run --no-sandbox --version 2>&1 | grep -o "Seamtag [0-9][0-9.]*"
               sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0
-              ./release/*.AppImage --appimage-extract-and-run --version 2>&1 | grep -o "Seamline Label [0-9][0-9.]*"
+              ./release/*.AppImage --appimage-extract-and-run --version 2>&1 | grep -o "Seamtag [0-9][0-9.]*"
               ;;
-            Windows) release/win-unpacked/seamline-label.exe --version ;;
+            Windows) release/win-unpacked/seamtag.exe --version ;;
             macOS) "$(find release -maxdepth 2 -name '*.app' | head -1)"/Contents/MacOS/* --version ;;
           esac
       - uses: actions/upload-artifact@v7

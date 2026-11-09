@@ -1,6 +1,6 @@
 # Config
 
-Seamline Label reads `~/.seamline-labelrc`, a YAML file it creates on first run. Put in it only what you want to change. It takes labelme's keys, so the lines of a `~/.labelmerc` work as they are; `seamline-label --config ~/.labelmerc` reads that file instead, and `--config '{auto_save: false}'` passes overrides inline. Keys this version doesn't know are reported and skipped, so a newer labelme's file still opens. The defaults are in [`src/shared/config.ts`](../src/shared/config.ts).
+Seamtag reads `~/.seamtagrc`, a YAML file it creates on first run. Put in it only what you want to change. It takes labelme's keys, so the lines of a `~/.labelmerc` work as they are; `seamtag --config ~/.labelmerc` reads that file instead, and `--config '{auto_save: false}'` passes overrides inline. Keys this version doesn't know are reported and skipped, so a newer labelme's file still opens. The defaults are in [`src/shared/config.ts`](../src/shared/config.ts).
 
 ```yaml
 labels: [cat, dog]
@@ -50,7 +50,7 @@ shortcuts:
 
 `fit_to_content`, `logger_level` and the rest of `performance` are accepted and have no effect here: the window lays itself out, and large images always go through tile pyramids.
 
-## Seamline Label's own keys
+## Seamtag's own keys
 
 | Key | Default | |
 |---|---|---|

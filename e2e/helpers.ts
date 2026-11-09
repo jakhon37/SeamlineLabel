@@ -5,7 +5,7 @@ import path from 'path'
 import sharp from 'sharp'
 
 export const W = 400, H = 300
-export const BASE = process.env.E2E_DIR || path.join(tmpdir(), 'seamline-label-e2e')
+export const BASE = process.env.E2E_DIR || path.join(tmpdir(), 'seamtag-e2e')
 
 export const square = (label: string, x0: number, y0: number, x1: number, y1: number, score?: number) => ({
   label, shape_type: 'polygon', group_id: null, description: '',
@@ -38,7 +38,7 @@ export async function project(folder: string, files: Record<string, string | nul
  * writes the settings, config or recent files of the person running it.
  */
 export async function launch(target: string | null, extra: string[] = [], home?: string) {
-  const own = home ?? mkdtempSync(path.join(tmpdir(), 'seamline-label-home-'))
+  const own = home ?? mkdtempSync(path.join(tmpdir(), 'seamtag-home-'))
   // A home with the folders Windows expects in one
   const roaming = path.join(own, 'AppData', 'Roaming'), local = path.join(own, 'AppData', 'Local')
   mkdirSync(roaming, { recursive: true })
@@ -48,7 +48,7 @@ export async function launch(target: string | null, extra: string[] = [], home?:
     args: [path.resolve(__dirname, '..'), ...headless, ...(target ? [target] : []), ...extra],
     env: {
       ...process.env, HOME: own, USERPROFILE: own, APPDATA: roaming, LOCALAPPDATA: local, XDG_CONFIG_HOME: path.join(own, '.config'),
-      SEAMLINE_LABEL_USER_DATA: path.join(own, 'profile')
+      SEAMTAG_USER_DATA: path.join(own, 'profile')
     } as Record<string, string>
   })
   const page = await app.firstWindow()

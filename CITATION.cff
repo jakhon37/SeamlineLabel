@@ -1,11 +1,11 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it, and labelme, as below."
-title: "Seamline Label: image annotation in LabelMe format"
+title: "Seamtag: image annotation in LabelMe format"
 authors:
 - family-names: "Nodirov"
   given-names: "Jakhongir"
 version: 3.0.0
-url: "https://github.com/jakhon37/SeamlineLabel"
+url: "https://github.com/jakhon37/Seamtag"
 license: GPL-3.0-only
 references:
 - type: software

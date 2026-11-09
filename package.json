@@ -1,5 +1,5 @@
 {
-  "name": "seamline-label",
+  "name": "seamtag",
   "version": "3.0.0",
   "description": "Label images in LabelMe format: polygons, boxes, brush and eraser, AI segmentation, and review of model proposals",
   "license": "GPL-3.0-only",
@@ -40,10 +40,10 @@
     "vite": "^5.4.11",
     "vitest": "^3.2.4"
   },
-  "productName": "Seamline Label",
+  "productName": "Seamtag",
   "author": {
     "name": "Jakhongir Nodirov",
     "email": "jakhon37@gmail.com"
   },
-  "homepage": "https://github.com/jakhon37/SeamlineLabel"
+  "homepage": "https://github.com/jakhon37/Seamtag"
 }

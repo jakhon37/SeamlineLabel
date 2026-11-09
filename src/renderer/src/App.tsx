@@ -6,8 +6,8 @@ import Logo from './Logo'
 import MenuBar, { ContextMenu, type MenuSpec } from './Menu'
 import { type ImageItem, type OpenProject, plainError, type ProjectInfo, type Start } from './types'
 
-const DOCS = 'https://github.com/jakhon37/SeamlineLabel#readme'
-const KEPT = 'seamline-label:settings'
+const DOCS = 'https://github.com/jakhon37/Seamtag#readme'
+const KEPT = 'seamtag:settings'
 
 // Settings made in the window that outlast it. Saving and the like start from the config each time, as in labelme.
 type Kept = Pick<Settings, 'fill' | 'fit' | 'aiModel' | 'prelabelModel' | 'docks' | 'dark'>
@@ -184,7 +184,7 @@ export default function App() {
       dark_mode: { label: 'Dark mode', run: () => setSettings((s) => ({ ...s, dark: !s.dark })), checked: () => !!settings?.dark },
       shortcuts: { label: 'Keyboard shortcuts', run: () => setHelp(true) },
       docs: { label: 'Documentation', run: () => window.api.openLink(DOCS) },
-      about: { label: `About Seamline Label`, run: () => setAbout(true) }
+      about: { label: `About Seamtag`, run: () => setAbout(true) }
     }
     ;(start?.recent ?? []).forEach((r, i) => (own[`recent:${i}`] = { label: r, run: () => open(r) }))
     return { ...(labeler.current?.commands ?? {}), ...own }
@@ -223,7 +223,7 @@ export default function App() {
           <Logo size={72} />
           <h1>The config file has a problem</h1>
           <p className="error static">{start.configError}</p>
-          <p>{start.configFile ?? '~/.seamline-labelrc'}</p>
+          <p>{start.configFile ?? '~/.seamtagrc'}</p>
           <button className="primary" onClick={() => window.api.openConfig()}>Open config file</button>
         </div>
       </div>
@@ -233,7 +233,7 @@ export default function App() {
   return (
     <div className="app" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       <header className="topbar">
-        <div className="brand"><Logo size={22} /> Seamline Label</div>
+        <div className="brand"><Logo size={22} /> Seamtag</div>
         <MenuBar menus={MENUS} commands={commands} config={config} mac={mac} />
         <div className="spacer" />
         {data && (
@@ -274,7 +274,7 @@ export default function App() {
         <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && setAbout(false)}>
           <div className="dialog about" role="dialog" aria-label="About">
             <Logo size={56} />
-            <h1>Seamline Label {start.version}</h1>
+            <h1>Seamtag {start.version}</h1>
             <p>Image annotation in LabelMe format, with brush, eraser, AI segmentation and review of model proposals.</p>
             <p className="muted">Continues LabelMeV2, an enhanced fork of labelme by Kentaro Wada, on Seamline's desktop app. GPL-3.0. AI models are downloaded from the addresses osam and labelme use, under their own licences.</p>
             <div className="actions"><button className="primary" onClick={() => setAbout(false)}>Close</button></div>

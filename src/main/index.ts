@@ -11,10 +11,10 @@ import {
   saveProjectFile, type SaveRequest, summarizeAll
 } from './project'
 
-const NAME = 'Seamline Label'
+const NAME = 'Seamtag'
 app.setName(NAME)
 // macOS and Windows put the profile where the system says, whatever HOME is, so tests name their own
-if (process.env.SEAMLINE_LABEL_USER_DATA) app.setPath('userData', process.env.SEAMLINE_LABEL_USER_DATA)
+if (process.env.SEAMTAG_USER_DATA) app.setPath('userData', process.env.SEAMTAG_USER_DATA)
 
 // In development Electron's own arguments come first: `electron . image.jpg`
 const argv = process.argv.slice(app.isPackaged ? 1 : 2)

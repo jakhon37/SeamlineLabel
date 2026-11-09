@@ -1,22 +1,19 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/seamline-logo-on-dark.svg">
-    <img src="docs/brand/seamline-logo-on-light.svg" alt="Seamline" width="300">
-  </picture>
+  <img src="docs/brand/seamline-mark.svg" alt="" width="104">
 </p>
 
-<h1 align="center">Seamline Label</h1>
+<h1 align="center">Seamtag</h1>
 
 <p align="center"><b>Label images in LabelMe format, with labelme's tools, a brush and eraser, AI segmentation, and review of a model's proposals. For Windows, macOS and Linux.</b></p>
 
 <p align="center">
-  <a href="https://github.com/jakhon37/SeamlineLabel/actions/workflows/ci.yml"><img src="https://github.com/jakhon37/SeamlineLabel/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/jakhon37/Seamtag/actions/workflows/ci.yml"><img src="https://github.com/jakhon37/Seamtag/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0"></a>
 </p>
 
-![Seamline Label editing a polygon on one of labelme's example photos](docs/media/label.webp)
+![Seamtag editing a polygon on one of labelme's example photos](docs/media/label.webp)
 
-Seamline Label is the labelling half of [Seamline](https://github.com/jakhon37/Seamline), on its own. It reads and writes the same JSON files as [labelme](https://github.com/wkentaro/labelme), takes the same command line and config keys, and offers the same tools, so a folder labelled in either opens in the other. Everything runs on your computer: images, labels and AI models never leave it.
+Seamtag is the labelling half of [Seamline](https://github.com/jakhon37/Seamline), on its own. It reads and writes the same JSON files as [labelme](https://github.com/wkentaro/labelme), takes the same command line and config keys, and offers the same tools, so a folder labelled in either opens in the other. Everything runs on your computer: images, labels and AI models never leave it.
 
 ## What it does
 
@@ -38,21 +35,21 @@ Seamline Label is the labelling half of [Seamline](https://github.com/jakhon37/S
 
 ## Install
 
-Download the installer for your system from [Releases](https://github.com/jakhon37/SeamlineLabel/releases).
+Download the installer for your system from [Releases](https://github.com/jakhon37/Seamtag/releases).
 
 | System | File | Notes |
 |---|---|---|
-| Windows 10 and 11 | `Seamline-Label-…-win-x64.exe` | Not code-signed yet: on the SmartScreen warning, choose More info, then Run anyway. |
-| macOS on Apple silicon | `Seamline-Label-…-mac-arm64.dmg` | Not notarised yet: right-click the app and choose Open the first time, or run `xattr -cr "/Applications/Seamline Label.app"`. |
-| macOS on Intel | `Seamline-Label-…-mac-x64.dmg` | As above. |
-| Linux | `Seamline-Label-…-linux-amd64.deb` | `sudo apt install ./Seamline-Label-*.deb` adds a `seamline-label` command, and on Ubuntu 24.04 and later the AppArmor profile Chromium's sandbox needs. |
-| Linux, any distribution | `Seamline-Label-…-linux-x86_64.AppImage` | `chmod +x` it and run it. On Ubuntu the .deb is simpler: an AppImage can't add that profile, so from 24.04 it needs `--no-sandbox`, and it needs `sudo apt install libfuse2t64` (`libfuse2` on 22.04). |
+| Windows 10 and 11 | `Seamtag-…-win-x64.exe` | Not code-signed yet: on the SmartScreen warning, choose More info, then Run anyway. |
+| macOS on Apple silicon | `Seamtag-…-mac-arm64.dmg` | Not notarised yet: right-click the app and choose Open the first time, or run `xattr -cr "/Applications/Seamtag.app"`. |
+| macOS on Intel | `Seamtag-…-mac-x64.dmg` | As above. |
+| Linux | `Seamtag-…-linux-amd64.deb` | `sudo apt install ./Seamtag-*.deb` adds a `seamtag` command, and on Ubuntu 24.04 and later the AppArmor profile Chromium's sandbox needs. |
+| Linux, any distribution | `Seamtag-…-linux-x86_64.AppImage` | `chmod +x` it and run it. On Ubuntu the .deb is simpler: an AppImage can't add that profile, so from 24.04 it needs `--no-sandbox`, and it needs `sudo apt install libfuse2t64` (`libfuse2` on 22.04). |
 
 To build it yourself you need Node 22:
 
 ```bash
-git clone https://github.com/jakhon37/SeamlineLabel.git
-cd SeamlineLabel
+git clone https://github.com/jakhon37/Seamtag.git
+cd Seamtag
 npm ci
 npm run dev
 ```
@@ -64,7 +61,7 @@ npm run dev
 Open a folder of images: labels are saved beside each image as `name.json`, in labelme's format. Images in subfolders are listed too. The command line is labelme's:
 
 ```bash
-seamline-label images/ --labels labels.txt --flags night,blurry --labelflags '{person: [occluded]}' -O labels/
+seamtag images/ --labels labels.txt --flags night,blurry --labelflags '{person: [occluded]}' -O labels/
 ```
 
 | Option | |
@@ -77,7 +74,7 @@ seamline-label images/ --labels labels.txt --flags night,blurry --labelflags '{p
 | `--nodata`, `--autosave`, `--keep-prev`, `--nosortlabels`, `--epsilon N` | As in labelme |
 | `--config FILE\|YAML` | A config file, such as your `~/.labelmerc`, or YAML overrides |
 
-Settings live in `~/.seamline-labelrc`, which takes labelme's keys, so a `~/.labelmerc` can be copied in as it is. File → Open config file opens it. [docs/config.md](docs/config.md) lists every key, including the shortcuts.
+Settings live in `~/.seamtagrc`, which takes labelme's keys, so a `~/.labelmerc` can be copied in as it is. File → Open config file opens it. [docs/config.md](docs/config.md) lists every key, including the shortcuts.
 
 ### Keys
 
@@ -123,7 +120,7 @@ An Electron app in TypeScript. The main process reads and writes files, builds t
 
 ## History
 
-This repository continues [LabelMeV2](https://github.com/jakhon37/LabelMeV2), a fork of labelme that made big images load faster and added 5000% zoom, points along an edge, polygon merge and dark mode: those are its first 29 commits. The labeller of Seamline's desktop app joined with its own history in [`6204364`](https://github.com/jakhon37/SeamlineLabel/commit/6204364), so its files keep their commits, and replaced the Qt app in [`c2cc715`](https://github.com/jakhon37/SeamlineLabel/commit/c2cc715). Version 3.0 is the first on the new stack; [CHANGELOG.md](CHANGELOG.md) has the rest.
+This repository continues [LabelMeV2](https://github.com/jakhon37/LabelMeV2), a fork of labelme that made big images load faster and added 5000% zoom, points along an edge, polygon merge and dark mode: those are its first 29 commits. The labeller of Seamline's desktop app joined with its own history in [`6204364`](https://github.com/jakhon37/Seamtag/commit/6204364), so its files keep their commits, and replaced the Qt app in [`c2cc715`](https://github.com/jakhon37/Seamtag/commit/c2cc715). Version 3.0 is the first on the new stack; [CHANGELOG.md](CHANGELOG.md) has the rest.
 
 ## License
 

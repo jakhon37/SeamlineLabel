@@ -7,8 +7,8 @@ body:
       value: Thanks for taking the time to file a bug report! Please fill out this form as completely as possible.
   - type: input
     attributes:
-      label: Seamline Label version
-      description: Help → About, or `seamline-label --version`, and how you installed it (installer, AppImage, .deb, from source).
+      label: Seamtag version
+      description: Help → About, or `seamtag --version`, and how you installed it (installer, AppImage, .deb, from source).
     validations:
       required: true
   - type: input

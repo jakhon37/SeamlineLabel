@@ -2,4 +2,4 @@ blank_issues_enabled: true
 contact_links:
   - name: labelme
     url: https://github.com/wkentaro/labelme
-    about: For labelme itself. Seamline Label reads and writes its files, but it's a separate app.
+    about: For labelme itself. Seamtag reads and writes its files, but it's a separate app.

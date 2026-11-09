@@ -1,17 +1,17 @@
 # Changelog
 
-All notable changes to Seamline Label, and before it LabelMeV2, are documented in this file.
+All notable changes to Seamtag, and before it LabelMeV2, are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.0.0] - Seamline Label
+## [3.0.0] - Seamtag
 
 The labeller of [Seamline](https://github.com/jakhon37/Seamline), on its own, in place of the Qt app.
 
 ### Added
 - All of labelme's shape types and editing, in an Electron app: the label dialog with completion, flags per label pattern, group ID, description and validation; image flags; the shape list with visibility and order; copy and paste across images; merge; adding points along an edge; keep previous annotation; brightness and contrast; output folders; image data in label files; label files opened on their own; images in subfolders.
-- labelme's command line and config keys. Settings live in `~/.seamline-labelrc`; `--config ~/.labelmerc` reads a labelme config as it is.
+- labelme's command line and config keys. Settings live in `~/.seamtagrc`; `--config ~/.labelmerc` reads a labelme config as it is.
 - AI polygon and AI mask with labelme's eight SAM models, through onnxruntime, sharing osam's model cache. On the test photo the masks equal osam's, pixel for pixel.
 - Pre-labelling with any ONNX segmentation model, with scores, and review of the proposals: `W` accept, `S` reject, `Tab` skip, least certain first.
 - Brush and eraser, from Seamline.
@@ -85,5 +85,5 @@ For details on our release process and development workflow, see [CONTRIBUTING.m
 
 ## Upstream
 
-Seamline Label descends from [labelme](https://github.com/wkentaro/labelme) by Kentaro Wada, through LabelMeV2.
+Seamtag descends from [labelme](https://github.com/wkentaro/labelme) by Kentaro Wada, through LabelMeV2.
 See labelme's repository for its history before the fork.

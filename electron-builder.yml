@@ -1,10 +1,10 @@
 # Installers for Windows, macOS and Linux. Each is built on its own system in CI
 # (.github/workflows/release.yml); `npm run dist` builds the one for this computer.
-appId: io.github.jakhon37.seamlinelabel
-productName: Seamline Label
-executableName: seamline-label
+appId: io.github.jakhon37.seamtag
+productName: Seamtag
+executableName: seamtag
 copyright: Copyright © 2026 Jakhongir Nodirov
-artifactName: Seamline-Label-${version}-${os}-${arch}.${ext}
+artifactName: Seamtag-${version}-${os}-${arch}.${ext}
 directories:
   output: release
   buildResources: resources
@@ -34,7 +34,7 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
-  shortcutName: Seamline Label
+  shortcutName: Seamtag
 mac:
   category: public.app-category.graphics-design
   target:

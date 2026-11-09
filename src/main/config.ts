@@ -6,12 +6,12 @@ import { checkConfig, type Config, defaultConfig, mergeConfig, migrateConfig } f
 
 // Its own file, not ~/.labelmerc: labelme stops on keys it doesn't know, and this app adds some.
 // `--config ~/.labelmerc` reads a labelme config as it is.
-export const USER_CONFIG = path.join(homedir(), '.seamline-labelrc')
+export const USER_CONFIG = path.join(homedir(), '.seamtagrc')
 
-const HEADER = `# Seamline Label config file.
+const HEADER = `# Seamtag config file.
 # Only add settings you want to override. It takes labelme's keys, so a ~/.labelmerc
 # can be copied in as it is. For all options and defaults, see:
-#   https://github.com/jakhon37/SeamlineLabel/blob/main/docs/config.md
+#   https://github.com/jakhon37/Seamtag/blob/main/docs/config.md
 #
 # Example:
 # auto_save: true
@@ -38,13 +38,13 @@ export type Args = {
   help: boolean
 }
 
-export const USAGE = `Usage: seamline-label [options] [image, label file or folder]
+export const USAGE = `Usage: seamtag [options] [image, label file or folder]
 
   -h, --help            show this help
   -V, --version         show the version
   --reset-config        forget window layout, recent files and settings made in the app
   --output, -O, -o DIR  folder for label files (a path ending in .json saves one file there)
-  --config FILE|YAML    config file, or YAML overrides (default: ~/.seamline-labelrc)
+  --config FILE|YAML    config file, or YAML overrides (default: ~/.seamtagrc)
   --nodata              don't store image data in label files
   --autosave            save automatically
   --nosortlabels        keep labels in the order given
