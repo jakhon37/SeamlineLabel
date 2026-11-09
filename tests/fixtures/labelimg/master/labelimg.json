@@ -1,0 +1,563 @@
+[
+ {
+  "image": "cars.png",
+  "path": "/data/images/cars.png",
+  "size": [
+   64,
+   48
+  ],
+  "depth": 3,
+  "verified": true,
+  "shapes": [
+   {
+    "label": "car",
+    "points": [
+     [
+      10.6,
+      12.2
+     ],
+     [
+      40.9,
+      30.5
+     ]
+    ],
+    "difficult": false
+   },
+   {
+    "label": "a & <b>",
+    "points": [
+     [
+      0.0,
+      0.0
+     ],
+     [
+      64.0,
+      48.0
+     ]
+    ],
+    "difficult": true
+   },
+   {
+    "label": "고양이",
+    "points": [
+     [
+      50.2,
+      40.7
+     ],
+     [
+      20.1,
+      5.3
+     ]
+    ],
+    "difficult": false
+   },
+   {
+    "label": "dog",
+    "points": [
+     [
+      2.0,
+      3.0
+     ],
+     [
+      3.0,
+      9.0
+     ]
+    ],
+    "difficult": false
+   }
+  ],
+  "classes": [
+   "dog",
+   "cat",
+   "car",
+   "a & <b>",
+   "고양이"
+  ],
+  "read": {
+   "voc": {
+    "verified": true,
+    "shapes": [
+     {
+      "label": "car",
+      "points": [
+       [
+        10,
+        12
+       ],
+       [
+        40,
+        12
+       ],
+       [
+        40,
+        30
+       ],
+       [
+        10,
+        30
+       ]
+      ],
+      "difficult": false
+     },
+     {
+      "label": "a & <b>",
+      "points": [
+       [
+        1,
+        1
+       ],
+       [
+        64,
+        1
+       ],
+       [
+        64,
+        48
+       ],
+       [
+        1,
+        48
+       ]
+      ],
+      "difficult": true
+     },
+     {
+      "label": "고양이",
+      "points": [
+       [
+        20,
+        5
+       ],
+       [
+        50,
+        5
+       ],
+       [
+        50,
+        40
+       ],
+       [
+        20,
+        40
+       ]
+      ],
+      "difficult": false
+     },
+     {
+      "label": "dog",
+      "points": [
+       [
+        2,
+        3
+       ],
+       [
+        3,
+        3
+       ],
+       [
+        3,
+        9
+       ],
+       [
+        2,
+        9
+       ]
+      ],
+      "difficult": false
+     }
+    ]
+   },
+   "yolo": {
+    "verified": false,
+    "shapes": [
+     {
+      "label": "car",
+      "points": [
+       [
+        10,
+        12
+       ],
+       [
+        40,
+        12
+       ],
+       [
+        40,
+        30
+       ],
+       [
+        10,
+        30
+       ]
+      ],
+      "difficult": false
+     },
+     {
+      "label": "a & <b>",
+      "points": [
+       [
+        1,
+        1
+       ],
+       [
+        64,
+        1
+       ],
+       [
+        64,
+        48
+       ],
+       [
+        1,
+        48
+       ]
+      ],
+      "difficult": false
+     },
+     {
+      "label": "고양이",
+      "points": [
+       [
+        20,
+        5
+       ],
+       [
+        50,
+        5
+       ],
+       [
+        50,
+        40
+       ],
+       [
+        20,
+        40
+       ]
+      ],
+      "difficult": false
+     },
+     {
+      "label": "dog",
+      "points": [
+       [
+        2,
+        3
+       ],
+       [
+        3,
+        3
+       ],
+       [
+        3,
+        9
+       ],
+       [
+        2,
+        9
+       ]
+      ],
+      "difficult": false
+     }
+    ]
+   },
+   "createml": {
+    "verified": true,
+    "shapes": [
+     {
+      "label": "car",
+      "points": [
+       [
+        10.600000000000001,
+        12.200000000000001
+       ],
+       [
+        40.9,
+        12.200000000000001
+       ],
+       [
+        40.9,
+        30.5
+       ],
+       [
+        10.600000000000001,
+        30.5
+       ]
+      ],
+      "difficult": true
+     },
+     {
+      "label": "a & <b>",
+      "points": [
+       [
+        0.0,
+        0.0
+       ],
+       [
+        64.0,
+        0.0
+       ],
+       [
+        64.0,
+        48.0
+       ],
+       [
+        0.0,
+        48.0
+       ]
+      ],
+      "difficult": true
+     },
+     {
+      "label": "고양이",
+      "points": [
+       [
+        20.100000000000005,
+        5.300000000000001
+       ],
+       [
+        50.2,
+        5.300000000000001
+       ],
+       [
+        50.2,
+        40.7
+       ],
+       [
+        20.100000000000005,
+        40.7
+       ]
+      ],
+      "difficult": true
+     },
+     {
+      "label": "dog",
+      "points": [
+       [
+        2.0,
+        3.0
+       ],
+       [
+        3.0,
+        3.0
+       ],
+       [
+        3.0,
+        9.0
+       ],
+       [
+        2.0,
+        9.0
+       ]
+      ],
+      "difficult": true
+     }
+    ]
+   }
+  }
+ },
+ {
+  "image": "grey.png",
+  "path": "/data/images/grey.png",
+  "size": [
+   50,
+   40
+  ],
+  "depth": 1,
+  "verified": false,
+  "shapes": [
+   {
+    "label": "cat",
+    "points": [
+     [
+      5.5,
+      6.5
+     ],
+     [
+      25.25,
+      33.75
+     ]
+    ],
+    "difficult": true
+   }
+  ],
+  "classes": [
+   "dog",
+   "cat",
+   "car",
+   "a & <b>",
+   "고양이"
+  ],
+  "read": {
+   "voc": {
+    "verified": false,
+    "shapes": [
+     {
+      "label": "cat",
+      "points": [
+       [
+        5,
+        6
+       ],
+       [
+        25,
+        6
+       ],
+       [
+        25,
+        33
+       ],
+       [
+        5,
+        33
+       ]
+      ],
+      "difficult": true
+     }
+    ]
+   },
+   "yolo": {
+    "verified": false,
+    "shapes": [
+     {
+      "label": "cat",
+      "points": [
+       [
+        5,
+        6
+       ],
+       [
+        25,
+        6
+       ],
+       [
+        25,
+        33
+       ],
+       [
+        5,
+        33
+       ]
+      ],
+      "difficult": false
+     }
+    ]
+   },
+   "createml": {
+    "verified": false,
+    "shapes": [
+     {
+      "label": "cat",
+      "points": [
+       [
+        5.5,
+        6.5
+       ],
+       [
+        25.25,
+        6.5
+       ],
+       [
+        25.25,
+        33.75
+       ],
+       [
+        5.5,
+        33.75
+       ]
+      ],
+      "difficult": true
+     }
+    ]
+   }
+  }
+ },
+ {
+  "image": "empty.png",
+  "path": "/data/images/empty.png",
+  "size": [
+   32,
+   32
+  ],
+  "depth": 3,
+  "verified": false,
+  "shapes": [],
+  "classes": [
+   "dog",
+   "cat",
+   "car",
+   "a & <b>",
+   "고양이"
+  ],
+  "read": {
+   "voc": {
+    "verified": false,
+    "shapes": []
+   },
+   "yolo": {
+    "verified": false,
+    "shapes": []
+   },
+   "createml": {
+    "verified": false,
+    "shapes": []
+   }
+  }
+ },
+ {
+  "image": "half.png",
+  "size": [
+   64,
+   40
+  ],
+  "read": {
+   "yolo": {
+    "shapes": [
+     {
+      "label": "dog",
+      "points": [
+       [
+        32,
+        18
+       ],
+       [
+        34,
+        18
+       ],
+       [
+        34,
+        22
+       ],
+       [
+        32,
+        22
+       ]
+      ],
+      "difficult": false
+     },
+     {
+      "label": "cat",
+      "points": [
+       [
+        0,
+        20
+       ],
+       [
+        32,
+        20
+       ],
+       [
+        32,
+        40
+       ],
+       [
+        0,
+        40
+       ]
+      ],
+      "difficult": false
+     }
+    ]
+   }
+  }
+ }
+]

@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
 import { describe, expect, test } from 'vitest'
@@ -34,9 +34,9 @@ describe('shortcuts, written as Qt writes them', () => {
     expect(formatKeys(['Ctrl+Shift+S', 'X'], false)).toBe('Ctrl+Shift+S')
   })
 
-  test('no two default shortcuts collide', () => {
+  const noCollisions = (shortcuts: Record<string, unknown>) => {
     const seen = new Map<string, string>()
-    for (const [name, value] of Object.entries(defaultConfig().shortcuts)) {
+    for (const [name, value] of Object.entries(shortcuts)) {
       for (const k of [value].flat().filter(Boolean) as string[]) {
         const id = JSON.stringify(parseKeys(k))
         // Undo and undo-last-point share Ctrl+Z on purpose: one while drawing, one otherwise
@@ -44,6 +44,19 @@ describe('shortcuts, written as Qt writes them', () => {
         seen.set(id, name)
       }
     }
+  }
+
+  test('no two default shortcuts collide', () => {
+    noCollisions(defaultConfig().shortcuts)
+  })
+
+  test("docs/config.md's lines for LabelImg's keys load, and no two keys collide", () => {
+    const docs = readFileSync(path.join(__dirname, '../../docs/config.md'), 'utf8')
+    const block = /```yaml\n(# LabelImg's keys\n[\s\S]*?)```/.exec(docs)![1]
+    const { config } = loadConfig(parseArgs(['--config', block]))
+    expect(config.shortcuts.create_rectangle).toEqual(['W', 'R'])
+    expect(config.shortcuts.copy_previous_shapes).toBe('Ctrl+V')
+    noCollisions(config.shortcuts)
   })
 })
 
@@ -95,6 +108,22 @@ describe('config', () => {
       label_flags: { '.*': ['occluded'] }, validate_label: 'exact', epsilon: 4, keep_prev: true, sort_labels: false
     })
     expect(() => parseArgs(['--validatelabel', 'fuzzy'])).toThrow()
+  })
+
+  test("LabelImg's command line: an image folder, a file of classes, then where labels go", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'sl-labelimg-'))
+    const classes = path.join(dir, 'predefined_classes.txt')
+    writeFileSync(classes, 'dog\nperson\ncat\n')
+    const args = parseArgs(['images', classes, 'annotations'])
+    expect([args.filename, args.output, args.overrides.labels]).toEqual(['images', 'annotations', ['dog', 'person', 'cat']])
+    // -O wins over the third
+    expect(parseArgs(['images', classes, 'annotations', '-O', 'out']).output).toBe('out')
+    expect(() => parseArgs(['images', path.join(dir, 'missing.txt')])).toThrow(/doesn't exist/)
+  })
+
+  test("label_format takes LabelImg's formats and labelme's", () => {
+    expect(loadConfig(parseArgs(['--config', '{label_format: yolo}'])).config.label_format).toBe('yolo')
+    expect(() => loadConfig(parseArgs(['--config', '{label_format: coco}']))).toThrow(/label_format/)
   })
 
   test('--config takes YAML overrides or a file, such as a ~/.labelmerc', () => {

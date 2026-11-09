@@ -177,3 +177,13 @@ input.group { width: 110px; }
 .recent { width: 420px; max-width: calc(100vw - 32px); text-align: left; margin-top: 12px; }
 .recent .file { color: var(--muted); }
 .slider select { width: auto; max-width: 170px; padding: 3px 6px; }
+
+/* LabelImg's: the verified mark, the difficult flag and the label filter over the shape list */
+.verified { color: var(--ok); display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.tag.difficult { background: var(--muted); }
+h3 .label-filter { width: auto; max-width: 60%; padding: 2px 6px; font-size: 12px; text-transform: none; letter-spacing: 0; }
+.row.selection { align-items: center; justify-content: space-between; margin-top: 8px; }
+.row.selection .ghost.danger { margin-top: 0; }
+.status .verify { display: inline-flex; align-items: center; gap: 4px; padding: 0; }
+.status .verify.verified { color: var(--ok); }
+.topbar select.format { width: auto; padding: 3px 6px; font-size: 12px; }

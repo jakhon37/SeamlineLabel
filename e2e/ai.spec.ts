@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { existsSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync } from 'fs'
 import path from 'path'
 import sharp from 'sharp'
 import { click, doc, finish, launch, open, project, saved, shapesIn, square, W, H } from './helpers'
@@ -115,5 +115,18 @@ test('AI polygon and AI mask with SAM', async () => {
   }
   expect(on / all).toBeGreaterThan(0.95)
   expect(all).toBeGreaterThan(Math.PI * 65 * 65)
+  // In Pascal VOC, which keeps boxes, the AI polygon is saved as the box around the disc
+  await page.getByLabel('Save format').selectOption('voc')
+  await expect.poll(() => existsSync(path.join(dir, 'd.xml'))).toBe(true)
+  await page.getByRole('toolbar').getByRole('button', { name: 'AI polygon', exact: true }).click()
+  await click(page, 200, 150)
+  await expect(page.locator('.loading.notice')).toHaveCount(0, { timeout: 60000 })
+  await page.keyboard.press('Enter')
+  await expect.poll(() => readFileSync(path.join(dir, 'd.xml'), 'utf8').match(/<object>/g)?.length).toBe(3)
+  const last = readFileSync(path.join(dir, 'd.xml'), 'utf8').split('<object>')[3]
+  const [bx0, by0, bx1, by1] = ['xmin', 'ymin', 'xmax', 'ymax'].map((k) => Number(new RegExp(`<${k}>(\\d+)</${k}>`).exec(last)![1]))
+  expect(bx0).toBeGreaterThan(120)
+  expect(bx1).toBeLessThan(280)
+  expect(Math.abs((bx1 - bx0) - (by1 - by0))).toBeLessThan(12)
   await finish(app, errors)
 })

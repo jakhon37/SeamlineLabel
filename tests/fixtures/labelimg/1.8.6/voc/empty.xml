@@ -1,0 +1,14 @@
+<annotation>
+	<folder>images</folder>
+	<filename>empty.png</filename>
+	<path>/data/images/empty.png</path>
+	<source>
+		<database>Unknown</database>
+	</source>
+	<size>
+		<width>32</width>
+		<height>32</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+</annotation>

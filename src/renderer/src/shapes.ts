@@ -74,9 +74,22 @@ export function contains(s: Shape, p: Pt, tolerance: number) {
   return insideRing(p, outline(s))
 }
 
+/** The points that can be dragged: all four corners of a rectangle, as in LabelImg, and the points of the rest */
+export const vertices = (s: Shape): Pt[] => (s.shape_type === 'rectangle' && s.points.length === 2 ? outline(s) : s.points)
+
+/**
+ * A rectangle with one corner moved, still kept as labelme keeps it: two opposite corners,
+ * each staying first or second as it was.
+ */
+export function moveCorner(s: Shape, corner: number, p: Pt): Shape {
+  const [[a, b], [c, d]] = s.points
+  const points = [[[p[0], p[1]], [c, d]], [[a, p[1]], [p[0], d]], [[a, b], [p[0], p[1]]], [[p[0], b], [c, p[1]]]][corner]
+  return { ...s, points }
+}
+
 export function nearestVertex(s: Shape, p: Pt, tolerance: number): number {
   let best = -1, dist = tolerance
-  s.points.forEach((q, i) => {
+  vertices(s).forEach((q, i) => {
     const d = Math.hypot(p[0] - q[0], p[1] - q[1])
     if (d <= dist) { best = i; dist = d }
   })

@@ -1,5 +1,6 @@
 // labelme's config, key for key, so a ~/.labelmerc works here as it is, plus a few keys
 // for what this app adds. See docs/config.md.
+import { LABEL_FORMATS, type LabelFormat } from './formats'
 
 export type Shortcut = string | string[] | null
 
@@ -87,6 +88,10 @@ export const DEFAULT_CONFIG = {
   // Pre-labelling with a segmentation model: smaller blobs are dropped
   prelabel: { min_area: 20 },
 
+  // Where new labels are saved: LabelMe JSON, or LabelImg's Pascal VOC, YOLO or CreateML.
+  // An image that has a label file keeps that file's format, as in LabelImg.
+  label_format: 'labelme' as LabelFormat,
+
   shortcuts: {
     close: 'Ctrl+W' as Shortcut,
     open: 'Ctrl+O' as Shortcut,
@@ -94,7 +99,7 @@ export const DEFAULT_CONFIG = {
     quit: 'Ctrl+Q' as Shortcut,
     save: 'Ctrl+S' as Shortcut,
     save_as: 'Ctrl+Shift+S' as Shortcut,
-    save_to: null as Shortcut,
+    save_to: 'Ctrl+R' as Shortcut,
     delete_file: 'Ctrl+Delete' as Shortcut,
 
     open_next: ['D', 'Ctrl+Shift+D'] as Shortcut,
@@ -116,7 +121,7 @@ export const DEFAULT_CONFIG = {
     create_ai_mask: null as Shortcut,
     create_brush: 'B' as Shortcut,
     create_eraser: 'E' as Shortcut,
-    edit_polygon: ['Ctrl+Shift+C', 'V'] as Shortcut,
+    edit_polygon: ['Ctrl+Shift+C', 'V', 'Ctrl+J'] as Shortcut,
     delete_polygon: 'Delete' as Shortcut,
     duplicate_polygon: 'Ctrl+D' as Shortcut,
     copy_polygon: 'Ctrl+C' as Shortcut,
@@ -124,15 +129,32 @@ export const DEFAULT_CONFIG = {
     undo: 'Ctrl+Z' as Shortcut,
     redo: ['Ctrl+Shift+Z', 'Ctrl+Y'] as Shortcut,
     undo_last_point: 'Ctrl+Z' as Shortcut,
-    edit_label: 'Ctrl+Shift+X' as Shortcut,
+    edit_label: ['Ctrl+Shift+X', 'Ctrl+E'] as Shortcut,
     toggle_keep_prev_mode: 'Ctrl+P' as Shortcut,
     remove_selected_point: ['Meta+H', 'Backspace'] as Shortcut,
     add_multiple_points: 'Ctrl+M' as Shortcut,
     merge_polygons: 'Ctrl+Shift+M' as Shortcut,
 
-    show_all_polygons: null as Shortcut,
-    hide_all_polygons: null as Shortcut,
+    show_all_polygons: 'Ctrl+A' as Shortcut,
+    hide_all_polygons: 'Ctrl+H' as Shortcut,
     toggle_all_polygons: 'F' as Shortcut,
+
+    // LabelImg's
+    open_annotation: 'Ctrl+Shift+O' as Shortcut,
+    copy_previous_shapes: null as Shortcut,
+    change_format: null as Shortcut,
+    // A tap of Space: Space held down and dragged pans
+    verify_image: 'Space' as Shortcut,
+    delete_image: 'Ctrl+Shift+Delete' as Shortcut,
+    draw_squares: 'Ctrl+Shift+R' as Shortcut,
+    display_labels: 'Ctrl+Shift+P' as Shortcut,
+    single_class_mode: null as Shortcut,
+    toggle_difficult: null as Shortcut,
+    toggle_label_panel: 'Ctrl+Shift+L' as Shortcut,
+    advanced_mode: null as Shortcut,
+    box_line_color: 'Ctrl+L' as Shortcut,
+    shape_line_color: null as Shortcut,
+    shape_fill_color: null as Shortcut,
 
     review_accept: 'W' as Shortcut,
     review_accept_all: 'Shift+W' as Shortcut,
@@ -154,6 +176,9 @@ const isPlain = (v: unknown): v is Record<string, unknown> => typeof v === 'obje
 function validate(key: string, value: unknown) {
   if (key === 'validate_label' && value !== null && value !== 'exact') {
     throw new Error(`Unexpected value for config key 'validate_label': ${JSON.stringify(value)}`)
+  }
+  if (key === 'label_format' && !LABEL_FORMATS.includes(value as LabelFormat)) {
+    throw new Error(`Unexpected value for config key 'label_format': ${JSON.stringify(value)} (labelme, voc, yolo or createml)`)
   }
   if (key === 'shape_color' && value !== null && value !== 'auto' && value !== 'manual') {
     throw new Error(`Unexpected value for config key 'shape_color': ${JSON.stringify(value)}`)

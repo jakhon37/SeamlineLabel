@@ -1,6 +1,7 @@
 import { FolderOpen } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { type Config, formatKeys, matches, shortcutList } from '../../shared/config'
+import { FORMAT_NAMES, LABEL_FORMATS } from '../../shared/formats'
 import Labeler, { type Commands, type LabelerHandle, type Settings } from './Labeler'
 import Logo from './Logo'
 import MenuBar, { ContextMenu, type MenuSpec } from './Menu'
@@ -10,7 +11,7 @@ const DOCS = 'https://github.com/jakhon37/Seamtag#readme'
 const KEPT = 'seamtag:settings'
 
 // Settings made in the window that outlast it. Saving and the like start from the config each time, as in labelme.
-type Kept = Pick<Settings, 'fill' | 'fit' | 'aiModel' | 'prelabelModel' | 'docks' | 'dark'>
+type Kept = Pick<Settings, 'fill' | 'fit' | 'aiModel' | 'prelabelModel' | 'docks' | 'dark' | 'displayLabels' | 'drawSquares' | 'advanced' | 'drawColor'>
 function readKept(): Partial<Kept> {
   try {
     return JSON.parse(localStorage.getItem(KEPT) ?? '{}')
@@ -42,18 +43,24 @@ function initialSettings(config: Config): Settings {
       files: config.file_dock.show, labels: config.label_dock.show, shapes: config.shape_dock.show, flags: config.flag_dock.show,
       ...kept.docks
     },
-    dark: kept.dark ?? config.dark_mode
+    dark: kept.dark ?? config.dark_mode,
+    format: config.label_format,
+    displayLabels: kept.displayLabels ?? false,
+    drawSquares: kept.drawSquares ?? false,
+    askLabel: config.display_label_popup,
+    advanced: kept.advanced ?? true,
+    drawColor: kept.drawColor ?? null
   }
 }
 
 const MENUS: MenuSpec = [
-  { label: 'File', items: ['open', 'open_dir', { label: 'Open recent', items: [], prefix: 'recent:' }, '-', 'open_next', 'open_prev', '-', 'save', 'save_as', 'auto_save', 'store_data', 'save_to', '-', 'delete_file', 'reveal', 'close', '-', 'preferences', 'quit'] },
-  { label: 'Edit', items: ['create_polygon', 'create_rectangle', 'create_circle', 'create_line', 'create_point', 'create_linestrip', 'create_ai_polygon', 'create_ai_mask', 'create_brush', 'create_eraser', 'edit_polygon', '-', 'edit_label', 'duplicate_polygon', 'copy_polygon', 'paste_polygon', 'delete_polygon', 'merge_polygons', '-', 'undo', 'redo', 'remove_selected_point', 'add_multiple_points', 'toggle_lock', '-', 'toggle_keep_prev_mode'] },
-  { label: 'View', items: ['dock_flags', 'dock_labels', 'dock_shapes', 'dock_files', '-', 'fill_drawing', 'toggle_all_polygons', '-', 'zoom_in', 'zoom_out', 'zoom_to_original', 'fit_window', 'fit_width', 'keep_prev_scale', '-', 'brightness_contrast', 'keep_prev_brightness_contrast', '-', 'dark_mode'] },
+  { label: 'File', items: ['open', 'open_dir', { label: 'Open recent', items: [], prefix: 'recent:' }, 'open_annotation', '-', 'open_next', 'open_prev', 'copy_previous_shapes', '-', 'save', 'save_as', { label: 'Save format', items: [], prefix: 'format:' }, 'auto_save', 'store_data', 'save_to', '-', 'delete_file', 'delete_image', 'reveal', 'close', '-', 'preferences', 'reset_settings', 'quit'] },
+  { label: 'Edit', items: ['create_polygon', 'create_rectangle', 'create_circle', 'create_line', 'create_point', 'create_linestrip', 'create_ai_polygon', 'create_ai_mask', 'create_brush', 'create_eraser', 'edit_polygon', 'draw_squares', 'box_line_color', '-', 'edit_label', 'duplicate_polygon', 'copy_polygon', 'paste_polygon', 'delete_polygon', 'merge_polygons', '-', 'undo', 'redo', 'remove_selected_point', 'add_multiple_points', 'toggle_lock', 'toggle_difficult', 'shape_line_color', 'shape_fill_color', '-', 'verify_image', 'toggle_keep_prev_mode'] },
+  { label: 'View', items: ['dock_flags', 'dock_labels', 'dock_shapes', 'dock_files', '-', 'fill_drawing', 'display_labels', 'toggle_all_polygons', 'hide_all_polygons', 'show_all_polygons', '-', 'single_class_mode', 'advanced_mode', '-', 'zoom_in', 'zoom_out', 'zoom_to_original', 'fit_window', 'fit_width', 'keep_prev_scale', '-', 'brightness_contrast', 'keep_prev_brightness_contrast', '-', 'dark_mode'] },
   { label: 'AI', items: [{ label: 'Model for AI polygon and mask', items: [], prefix: 'ai_model:' }, '-', 'prelabel_pick', 'prelabel_one', 'prelabel_all', '-', 'review_accept', 'review_reject', 'review_skip', 'review_accept_all', 'order_certainty'] },
   { label: 'Help', items: ['shortcuts', 'docs', 'about'] }
 ]
-const CONTEXT = ['edit_label', 'duplicate_polygon', 'copy_polygon', 'paste_polygon', 'delete_polygon', 'merge_polygons', '-', 'undo', 'redo', '-', 'add_multiple_points', 'remove_selected_point', '-', 'edit_polygon', 'create_polygon', 'create_rectangle']
+const CONTEXT = ['edit_label', 'duplicate_polygon', 'copy_polygon', 'paste_polygon', 'delete_polygon', 'merge_polygons', 'toggle_difficult', 'shape_line_color', 'shape_fill_color', '-', 'undo', 'redo', '-', 'add_multiple_points', 'remove_selected_point', '-', 'edit_polygon', 'create_polygon', 'create_rectangle']
 
 export default function App() {
   const [start, setStart] = useState<Start | null>(null)
@@ -74,9 +81,9 @@ export default function App() {
 
   useEffect(() => {
     if (!settings) return
-    const { fill, fit, aiModel, prelabelModel, docks, dark } = settings
+    const { fill, fit, aiModel, prelabelModel, docks, dark, displayLabels, drawSquares, advanced, drawColor } = settings
     try {
-      localStorage.setItem(KEPT, JSON.stringify({ fill, fit, aiModel, prelabelModel, docks, dark }))
+      localStorage.setItem(KEPT, JSON.stringify({ fill, fit, aiModel, prelabelModel, docks, dark, displayLabels, drawSquares, advanced, drawColor }))
     } catch {
       // Not kept, then
     }
@@ -165,6 +172,13 @@ export default function App() {
     localStorage.removeItem('lastProject')
     setData(null)
   }
+  // LabelImg's Reset All: forgets what was set in the window, then starts again
+  const resetSettings = async () => {
+    const answer = await window.api.ask('Reset settings?', "The window's layout, recent folders and choices made in the menus are forgotten, and Seamtag starts again. Your config file stays as it is.", ['Reset', 'Cancel'])
+    if (answer !== 0) return
+    if (labeler.current && !(await labeler.current.canLeave())) return
+    await window.api.resetSettings()
+  }
   const dock = (k: keyof Settings['docks'], label: string) => ({
     label, run: () => setSettings((s) => ({ ...s, docks: { ...s.docks, [k]: !s.docks[k] } })), checked: () => !!settings?.docks[k]
   })
@@ -176,6 +190,14 @@ export default function App() {
       save_to: { label: 'Change output folder…', run: changeOutput, shortcut: 'save_to', enabled: () => !!data },
       close: { label: 'Close folder', run: closeFolder, shortcut: 'close', enabled: () => !!data },
       preferences: { label: 'Open config file', run: () => window.api.openConfig().catch((e) => showError(plainError(e))) },
+      reset_settings: { label: 'Reset settings…', run: resetSettings },
+      toggle_label_panel: {
+        label: 'Label panel', shortcut: 'toggle_label_panel', checked: () => !!(settings?.docks.labels || settings?.docks.shapes),
+        run: () => setSettings((s) => {
+          const show = !(s.docks.labels || s.docks.shapes)
+          return { ...s, docks: { ...s.docks, labels: show, shapes: show } }
+        })
+      },
       quit: { label: 'Quit', run: () => window.close(), shortcut: 'quit' },
       dock_flags: dock('flags', 'Flags'),
       dock_labels: dock('labels', 'Labels'),
@@ -194,7 +216,7 @@ export default function App() {
     if (!config) return
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === 'INPUT') return
-      for (const id of ['open', 'open_dir', 'close', 'quit', 'save_to'] as const) {
+      for (const id of ['open', 'open_dir', 'close', 'quit', 'save_to', 'toggle_label_panel'] as const) {
         const name = commands()[id]?.shortcut
         if (name && shortcutList(config.shortcuts[name]).some((k) => matches(k, e, mac))) {
           e.preventDefault()
@@ -241,6 +263,13 @@ export default function App() {
             {data.project.name} · {done}/{data.images.length} labelled{data.outputDir ? ' · output folder set' : ''}
           </span>
         )}
+        {data && (
+          // LabelImg's format button: new label files are saved in this format, and an image keeps the format of the file it has
+          <select className="format" value={settings.format} aria-label="Save format" title="Save format: an image that has a label file keeps its format, as in LabelImg"
+            onChange={(e) => { commands()[`format:${e.target.value}`]?.run(); e.target.blur() }}>
+            {LABEL_FORMATS.map((f) => <option key={f} value={f}>{FORMAT_NAMES[f]}</option>)}
+          </select>
+        )}
         <button className="ghost" onClick={pickDir} title={`Open folder (${formatKeys(config.shortcuts.open_dir, mac)})`}>
           <FolderOpen size={15} /> Open folder
         </button>
@@ -276,7 +305,7 @@ export default function App() {
             <Logo size={56} />
             <h1>Seamtag {start.version}</h1>
             <p>Image annotation in LabelMe format, with brush, eraser, AI segmentation and review of model proposals.</p>
-            <p className="muted">Continues LabelMeV2, an enhanced fork of labelme by Kentaro Wada, on Seamline's desktop app. GPL-3.0. AI models are downloaded from the addresses osam and labelme use, under their own licences.</p>
+            <p className="muted">Continues LabelMeV2, an enhanced fork of labelme by Kentaro Wada, on Seamline's desktop app. GPL-3.0. Pascal VOC, YOLO and CreateML files are read and written as LabelImg by Tzutalin does it, from its MIT-licensed code. AI models are downloaded from the addresses osam and labelme use, under their own licences.</p>
             <div className="actions"><button className="primary" onClick={() => setAbout(false)}>Close</button></div>
           </div>
         </div>
@@ -290,8 +319,10 @@ export default function App() {
                 <div key={id}><span>{c.label}</span><b>{shortcutList(config.shortcuts[c.shortcut!]).map((_, k) => formatKeys([config.shortcuts[c.shortcut!]].flat()[k], mac)).join('  ')}</b></div>
               ))}
               <div><span>Pick a label</span><b>1-9</b></div>
+              <div><span>Draw a square box</span><b>Shift or Ctrl while drawing</b></div>
+              <div><span>Copy or move shapes</span><b>Right drag on a shape</b></div>
               <div><span>Move the selection</span><b>Arrows, Shift for 10 px</b></div>
-              <div><span>Pan</span><b>Space+drag, middle or right drag</b></div>
+              <div><span>Pan</span><b>Space+drag, middle drag, right drag off shapes</b></div>
               <div><span>Add or remove a point</span><b>Alt+click an edge or a point</b></div>
             </div>
             <div className="actions"><button className="primary" onClick={() => setHelp(false)}>Close</button></div>

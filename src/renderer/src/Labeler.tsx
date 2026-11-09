@@ -1,22 +1,30 @@
 import {
   Check, CheckCheck, Circle, Eraser, Eye, EyeOff, Hexagon, Maximize, MousePointer2, Paintbrush, Plus, Redo2, SkipForward,
-  Slash, Sparkles, Spline, Square, Trash2, Undo2, Wand2, X, Dot, ScanLine, Lock
+  Slash, Sparkles, Spline, Square, Trash2, Undo2, Wand2, X, Dot, ScanLine, Lock, BadgeCheck
 } from 'lucide-react'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { type Config, matches, type ShortcutName, shortcutList } from '../../shared/config'
+import {
+  asBox, boxOf, FORMAT_NAMES, holdsBoxesOnly, keepsDifficult, keepsVerified, LABEL_FORMATS, type LabelFormat, NEXT_FORMAT
+} from '../../shared/formats'
 import { accepted, isAi, newShape, scoreOf, type Shape, type ShapeType } from '../../shared/labelfile'
 import { summarize } from '../../shared/labels'
 import { labelColor, withAlpha } from './colors'
 import { eraseShapes, paintShapes, strokeRegion } from './geometry'
 import LabelDialog, { flagsFor, type LabelChoice, type LabelRequest } from './LabelDialog'
+import { ContextMenu } from './Menu'
 import {
-  addPointsToEdge, bounds, canRemovePoint, CLOSED, contains, describe, edges, insertPoint, mergePolygons, moveShapes,
-  nearestEdge, nearestVertex, outline, type Pt, squareFrom, toEdge
+  addPointsToEdge, bounds, canRemovePoint, CLOSED, contains, describe, edges, insertPoint, mergePolygons, moveCorner, moveShapes,
+  nearestEdge, nearestVertex, outline, type Pt, squareFrom, toEdge, vertices
 } from './shapes'
-import { fileUrl, type ImageItem, type ModelInfo, type OpenImage, type OpenProject, plainError, type PrelabelModel, type ProjectInfo } from './types'
+import {
+  fileUrl, type ImageItem, type Loaded, type ModelInfo, type OpenImage, type OpenProject, plainError, type PrelabelModel, type ProjectInfo
+} from './types'
 
 export type Mode = 'edit' | 'polygon' | 'rectangle' | 'circle' | 'line' | 'point' | 'linestrip' | 'ai_polygon' | 'ai_mask' | 'brush' | 'eraser'
 export const CREATE_MODES: Mode[] = ['polygon', 'rectangle', 'circle', 'line', 'point', 'linestrip', 'ai_polygon', 'ai_mask']
+// LabelImg's formats keep boxes only: AI shapes become the box around them
+const BOX_MODES = new Set<Mode>(['edit', 'rectangle', 'ai_polygon', 'ai_mask'])
 
 export type Settings = {
   autoSave: boolean
@@ -31,6 +39,18 @@ export type Settings = {
   prelabelModel: string
   docks: { files: boolean; labels: boolean; shapes: boolean; flags: boolean }
   dark: boolean
+  /** Where new labels are saved; it follows the label file of the image opened, as in LabelImg */
+  format: LabelFormat
+  /** LabelImg's Display Labels: each shape's label drawn on it */
+  displayLabels: boolean
+  /** LabelImg's Draw Squares: boxes are drawn and reshaped square */
+  drawSquares: boolean
+  /** labelme's display_label_popup: ask for each new shape's label; LabelImg's Single Class Mode is this off */
+  askLabel: boolean
+  /** LabelImg's Advanced Mode: a tool stays on. Off, it's LabelImg's beginner mode: one shape, then back to editing. */
+  advanced: boolean
+  /** LabelImg's Box Line Color: the colour a shape is drawn in until it's finished; null for its label's */
+  drawColor: string | null
 }
 
 export type Command = { label: string; run: () => void; enabled?: () => boolean; checked?: () => boolean; shortcut?: ShortcutName; keys?: string }
@@ -57,6 +77,7 @@ type Drag =
   | { kind: 'move'; shapes: number[]; x: number; y: number; press: number[]; active: boolean; start: Shape[] }
   | { kind: 'two'; press: number[] }
   | { kind: 'stroke'; points: number[][]; radius: number }
+  | { kind: 'ghost'; shapes: number[]; x: number; y: number; press: number[]; active: boolean }
 type Draft = { points: Pt[]; labels: number[]; preview: Shape | null }
 type Hover = { shape: number; vertex: number; edge: number } | null
 
@@ -71,6 +92,7 @@ const FILTERS: { key: Filter; name: string; title: string; test: (i: ImageItem) 
   { key: 'done', name: 'Done', title: 'Labelled, nothing left to review', test: (i) => i.labelled && !i.ai && !i.broken }
 ]
 const percent = (score: number) => `${Math.round(score * 100)}%`
+const COLOR_TITLES = { line: 'Shape line colour', fill: 'Shape fill colour', draw: 'Box line colour' }
 const MODE_NAMES: Record<Mode, string> = {
   edit: 'Edit', polygon: 'Polygon', rectangle: 'Rectangle', circle: 'Circle', line: 'Line', point: 'Point',
   linestrip: 'Line strip', ai_polygon: 'AI polygon', ai_mask: 'AI mask', brush: 'Brush', eraser: 'Eraser'
@@ -83,6 +105,12 @@ function reviewOrder(list: Shape[]) {
     .filter(({ s }) => isAi(s) && !s.hidden)
     .sort((a, b) => (scoreOf(a.s) ?? 1) - (scoreOf(b.s) ?? 1) || a.i - b.i)
     .map(({ i }) => i)
+}
+
+/** A shape's own colour, [r, g, b, a] as labelme 3 and 4 kept it and LabelImg sets it; null for its label's */
+export function ownColor(v: unknown): string | null {
+  if (!Array.isArray(v) || v.length < 3 || !v.slice(0, 3).every((c) => typeof c === 'number' && Number.isFinite(c))) return null
+  return '#' + v.slice(0, 3).map((c: number) => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, '0')).join('')
 }
 
 // A labelme mask is a PNG of 0s and 1s: it becomes a tinted, see-through overlay
@@ -141,6 +169,11 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   const [dialog, setDialog] = useState<(LabelRequest & { resolve: (c: LabelChoice | null) => void }) | null>(null)
   const [pointsPrompt, setPointsPrompt] = useState<{ shape: number; edge: number; count: number } | null>(null)
   const [bc, setBc] = useState({ brightness: 1, contrast: 1 })
+  const [verified, setVerifiedState] = useState(false)
+  const [labelFilter, setLabelFilter] = useState('')
+  const [colorPrompt, setColorPrompt] = useState<{ kind: 'line' | 'fill' | 'draw'; value: string } | null>(null)
+  // LabelImg's right drag: where the copy was let go, waiting for Copy here or Move here
+  const [ghostMenu, setGhostMenu] = useState<{ x: number; y: number } | null>(null)
   const [bcOpen, setBcOpen] = useState(false)
   const [models, setModels] = useState<ModelInfo[] | null>(null)
   const [download, setDownload] = useState<{ name: string; done: number; total: number } | null>(null)
@@ -168,13 +201,23 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   const mouse = useRef<number[]>([0, 0])
   const screenMouse = useRef({ x: 0, y: 0 })
   const space = useRef(false)
+  // When Space went down, until a pan: let go soon after, it's a tap, which runs a command set to Space
+  const spaceTap = useRef<number | null>(null)
   const shift = useRef(false)
   const undo = useRef<Shape[][]>([])
   const redo = useRef<Shape[][]>([])
   const tiles = useRef(new Map<string, HTMLImageElement>())
   const frame = useRef(0)
   const saveTimer = useRef<ReturnType<typeof setTimeout>>()
-  const pending = useRef<{ name: string; shapes: Shape[]; flags: Record<string, boolean>; size: [number, number] } | null>(null)
+  const pending = useRef<{
+    name: string; shapes: Shape[]; flags: Record<string, boolean>; size: [number, number]; format: LabelFormat; verified: boolean; from: LabelFormat | null
+  } | null>(null)
+  // The format of the image's label file, and the one it's being switched from until the switch is saved
+  const fileFormat = useRef<LabelFormat | null>(null)
+  const switchedFrom = useRef<LabelFormat | null>(null)
+  const lastSave = useRef<Promise<boolean>>(Promise.resolve(true))
+  // Counts up to open the image on screen again, in another format
+  const [reload, setReload] = useState(0)
   const dirty = useRef(false)
   const saveTarget = useRef<string | null>(null)
   const clipboard = useRef<Shape[]>([])
@@ -185,6 +228,12 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   const lastScale = useRef<number | null>(null)
   const settingsRef = useRef(settings)
   settingsRef.current = settings
+  const verifiedRef = useRef(false)
+  // Changed at once when the format is switched, before the settings come back round
+  const formatRef = useRef(settings.format)
+  formatRef.current = settings.format
+  const ctrl = useRef(false)
+  const ghost = useRef<{ shapes: number[]; dx: number; dy: number } | null>(null)
 
   // The label list: config labels, then a Seamline project's classes, then labels found in the files
   const classes = useMemo(() => {
@@ -212,6 +261,10 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   }
   const setMode = (m: Mode) => {
     if (readOnlyRef.current && m !== 'edit') return
+    if (holdsBoxesOnly(formatRef.current) && !BOX_MODES.has(m)) {
+      setNotice(`${FORMAT_NAMES[formatRef.current]} keeps boxes only: switch the save format to LabelMe JSON to draw other shapes.`)
+      return
+    }
     draft.current = null
     aiSeq.current++
     setModeState(m)
@@ -254,6 +307,11 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     ctx.fillStyle = getComputedStyle(canvas).getPropertyValue('--canvas').trim() || '#0d0e11'
     ctx.fillRect(0, 0, W, H)
     if (!m) return
+    // LabelImg's Verify Image turns the background green
+    if (verifiedRef.current) {
+      ctx.fillStyle = 'rgba(184, 239, 38, 0.24)'
+      ctx.fillRect(0, 0, W, H)
+    }
     const { scale, x, y } = view.current
     const o = opts.current
     ctx.imageSmoothingEnabled = scale < 2
@@ -320,11 +378,12 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
           const pad = 10 / scale
           if (c * scale + x < -pad || a * scale + x > W + pad || d * scale + y < -pad || b * scale + y > H + pad) return
         }
-        const color = colorOf(s.label)
+        const color = ownColor(s.other.line_color) ?? colorOf(s.label)
+        const fillColor = ownColor(s.other.fill_color) ?? colorOf(s.label)
         const isSel = sel.has(i)
         const isHover = hv?.shape === i
         if (s.shape_type === 'mask' && s.mask && s.points.length >= 2) {
-          const c = maskCanvas(s.mask, color, () => invalidate())
+          const c = maskCanvas(s.mask, fillColor, () => invalidate())
           if (c) {
             ctx.globalAlpha = isSel ? Math.min(1, alpha + 0.25) : Math.max(alpha, 0.35)
             const [x0, y0] = S([Math.min(s.points[0][0], s.points[1][0]), Math.min(s.points[0][1], s.points[1][1])])
@@ -338,7 +397,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
         const closed = CLOSED.has(s.shape_type) || s.shape_type === 'point'
         if (closed && s.shape_type !== 'mask') {
           ctx.globalAlpha = isSel ? Math.min(1, alpha + 0.2) : isHover ? Math.min(1, alpha + 0.08) : alpha
-          ctx.fillStyle = color
+          ctx.fillStyle = fillColor
           ctx.fill('evenodd')
           ctx.globalAlpha = 1
         }
@@ -348,7 +407,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
         if (s.shape_type !== 'point' || isSel) ctx.stroke()
         ctx.setLineDash([])
         if (isSel || (isHover && hv && hv.vertex >= 0)) {
-          s.points.forEach((p, k) => {
+          vertices(s).forEach((p, k) => {
             if (s.shape_type === 'mask') return
             const [px, py] = S(p)
             const lit = isHover && hv?.vertex === k
@@ -373,6 +432,45 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
           }
         }
       })
+      const g = ghost.current
+      if (g) {
+        ctx.setLineDash([5, 4])
+        ctx.lineWidth = 2
+        for (const i of g.shapes) {
+          const s = shapesRef.current[i]
+          if (!s) continue
+          path({ ...s, points: s.points.map(([px, py]) => [px + g.dx, py + g.dy]) })
+          ctx.globalAlpha = 0.25
+          ctx.fillStyle = colorOf(s.label)
+          if (CLOSED.has(s.shape_type)) ctx.fill('evenodd')
+          ctx.globalAlpha = 1
+          ctx.strokeStyle = '#ffffff'
+          ctx.stroke()
+        }
+        ctx.setLineDash([])
+      }
+      // LabelImg's Display Labels: each label at its shape's top left, inside when there's no room above
+      if (o.settings.displayLabels) {
+        ctx.font = '600 12px system-ui, sans-serif'
+        ctx.textBaseline = 'middle'
+        shapesRef.current.forEach((s) => {
+          if (s.hidden || !s.label) return
+          const [x0, y0] = bounds(s)
+          const [lx, top] = S([x0, y0])
+          const w = ctx.measureText(s.label).width + 8, h = 17
+          const ly = top - h < 0 ? top : top - h
+          if (lx > W || ly > H || lx + w < 0 || ly + h < 0) return
+          const color = colorOf(s.label)
+          const v = parseInt(color.slice(1), 16)
+          ctx.globalAlpha = 0.85
+          ctx.fillStyle = color
+          ctx.fillRect(lx, ly, w, h)
+          ctx.globalAlpha = 1
+          ctx.fillStyle = ((v >> 16) & 255) * 0.299 + ((v >> 8) & 255) * 0.587 + (v & 255) * 0.114 > 150 ? '#000000' : '#ffffff'
+          ctx.fillText(s.label, lx + 4, ly + h / 2 + 0.5)
+        })
+        ctx.textBaseline = 'alphabetic'
+      }
     }
 
     const current = o.activeClass !== null ? o.classes[o.activeClass]?.color ?? '#ffffff' : '#ffffff'
@@ -405,10 +503,12 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     // What's being drawn, and the line or box to the pointer
     const dr = draft.current
     const live = livePoint()
+    // LabelImg's Box Line Color is the colour of what's being drawn
+    const pen = o.settings.drawColor ?? current
     if (dr && live) {
       const m2 = o.mode
-      ctx.strokeStyle = current
-      ctx.fillStyle = withAlpha(current, 0.25)
+      ctx.strokeStyle = pen
+      ctx.fillStyle = withAlpha(pen, 0.25)
       ctx.lineWidth = 2
       if (m2 === 'ai_polygon' || m2 === 'ai_mask') {
         if (dr.preview) {
@@ -441,17 +541,17 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
         if (shape) {
           path(shape)
           if (CLOSED.has(shape.shape_type) && (o.settings.fillDrawing || shape.shape_type !== 'polygon')) {
-            ctx.fillStyle = withAlpha(current, 0.25)
+            ctx.fillStyle = withAlpha(pen, 0.25)
             ctx.fill('evenodd')
           }
-          ctx.strokeStyle = current
+          ctx.strokeStyle = pen
           ctx.lineWidth = 2
           ctx.stroke()
         }
         dr.points.forEach((p, k) => {
           ctx.beginPath()
           ctx.arc(...S(p), k === 0 && m2 === 'polygon' ? 6 : 3.5, 0, Math.PI * 2)
-          ctx.fillStyle = k === 0 ? current : '#ffffff'
+          ctx.fillStyle = k === 0 ? pen : '#ffffff'
           ctx.fill()
         })
       }
@@ -475,6 +575,11 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     if (!frame.current) frame.current = requestAnimationFrame(draw)
   }, [draw])
 
+  /** Boxes come out square with Shift held, as in labelme, or Ctrl, or Draw Squares on, as in LabelImg */
+  const squareNow = () => shift.current || ctrl.current || settingsRef.current.drawSquares
+  const squareKeys = (e: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) =>
+    e.shiftKey || e.ctrlKey || e.metaKey || settingsRef.current.drawSquares
+
   /** The pointer as a point for the shape being drawn: on the image, as labelme keeps it */
   const livePoint = (): Pt | null => {
     const m = metaRef.current
@@ -490,7 +595,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     const first = dr.points[0]
     // Drawn open until it's closed
     if (md === 'polygon' || md === 'linestrip') return newShape('', 'linestrip', [...dr.points, p])
-    if (md === 'rectangle') return newShape('', 'rectangle', [first, shift.current ? squareFrom(first, p) : p])
+    if (md === 'rectangle') return newShape('', 'rectangle', [first, squareNow() ? squareFrom(first, p) : p])
     if (md === 'circle') return newShape('', 'circle', [first, p])
     if (md === 'line') return newShape('', 'line', [first, p])
     return null
@@ -538,11 +643,19 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   const doSave = useCallback(async (job: NonNullable<typeof pending.current>, target?: string) => {
     setSaved('saving')
     try {
-      const { item } = await window.api.saveLabels(root, job.name, {
+      const { item, replaced, kept, format } = await window.api.saveLabels(root, job.name, {
         shapes: job.shapes.map(({ hidden: _h, ...s }) => s), flags: job.flags, size: job.size,
-        storeData: settingsRef.current.storeData, target
+        storeData: settingsRef.current.storeData, target, format: job.format, verified: job.verified,
+        classes: opts.current.classes.map((c) => c.name), from: job.from ?? undefined
       })
       if (!target) setImages((all) => all.map((i) => (i.name === job.name ? { ...i, ...item } : i)))
+      if (!target && loadedName.current === job.name) {
+        fileFormat.current = format
+        if (switchedFrom.current === job.from) switchedFrom.current = null
+      }
+      const file = (p: string) => p.split(/[\\/]/).pop()
+      if (replaced) setNotice((n) => `${n ? `${n} ` : ''}Its old ${file(replaced)} went to the trash.`)
+      if (kept) onError(`Saved as ${FORMAT_NAMES[format]}, but ${kept}`)
       if (pending.current === null && loadedName.current === job.name) dirty.current = false
       setSaved(dirty.current ? 'unsaved' : 'saved')
       return true
@@ -558,14 +671,19 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     const job = pending.current
     if (!job) return true
     pending.current = null
-    return doSave(job, saveTarget.current ?? undefined)
+    const done = doSave(job, saveTarget.current ?? undefined)
+    lastSave.current = done
+    return done
   }, [doSave])
 
   const queueSave = () => {
     const m = metaRef.current
     const name = loadedName.current
     if (!m || !name || readOnlyRef.current) return
-    pending.current = { name, shapes: shapesRef.current, flags: flagsRef.current, size: [m.width, m.height] }
+    pending.current = {
+      name, shapes: shapesRef.current, flags: flagsRef.current, size: [m.width, m.height], format: formatRef.current, verified: verifiedRef.current,
+      from: switchedFrom.current
+    }
     dirty.current = true
     setSaved('unsaved')
     onChange()
@@ -582,6 +700,8 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     setImages((all) => all.map((i) => (i.name === name ? { ...i, ...summarize(next, true) } : i)))
     queueSave()
   }
+  /** Shapes as the save format keeps them: boxes in LabelImg's formats */
+  const forFormat = (list: Shape[]) => (holdsBoxesOnly(formatRef.current) ? list.map(asBox) : list)
   const setShapes = (next: Shape[], record = true) => {
     if (readOnlyRef.current) return
     if (record) {
@@ -637,9 +757,11 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
         const m = await window.api.openImage(root, name)
         if (stale) return
         let doc = null
+        let found: Loaded | null = null
         let broken = ''
         try {
-          doc = (await window.api.loadLabels(root, name)).doc
+          found = await window.api.loadLabels(root, name, formatRef.current, [m.width, m.height])
+          doc = found.doc
         } catch (e) {
           broken = plainError(e)
         }
@@ -669,10 +791,21 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
         hover.current = null
         flagsRef.current = flags
         setImageFlags(flags)
+        verifiedRef.current = !!found?.verified
+        setVerifiedState(verifiedRef.current)
+        fileFormat.current = found?.format ?? null
+        switchedFrom.current = null
+        setLabelFilter('')
+        // As in LabelImg, the save format follows the label file opened
+        if (found?.format && found.format !== formatRef.current) {
+          const format = found.format
+          formatRef.current = format
+          setSettings((s) => ({ ...s, format }))
+        }
         let copied = false
         if (copy && !doc && !broken && previous.length) {
           // labelme's "keep previous annotation": an image with no labels starts from the last one's
-          loaded = previous.map((s) => ({ ...s, hidden: undefined }))
+          loaded = forFormat(previous.map((s) => ({ ...s, hidden: undefined })))
           copied = true
         }
         prevShapes.current = previous
@@ -720,9 +853,14 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     })()
     return () => { stale = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index, images[index]?.name, root])
+  }, [index, images[index]?.name, root, reload])
 
-  useEffect(invalidate, [showShapes, settings.fill, settings.fillDrawing, selected, mode, activeClass, brushSize, classes, bc, invalidate])
+  useEffect(invalidate, [showShapes, settings.fill, settings.fillDrawing, settings.displayLabels, verified, selected, mode, activeClass, brushSize, classes, bc, invalidate])
+  // LabelImg's formats keep boxes: a tool for other shapes gives way to the rectangle
+  useEffect(() => {
+    if (holdsBoxesOnly(settings.format) && !BOX_MODES.has(mode)) setModeState('rectangle')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.format])
   useEffect(() => {
     if (!notice) return
     const timer = setTimeout(() => setNotice(''), 5000)
@@ -762,6 +900,13 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       redo.current = []
       setShapesState(found)
       setSelected([])
+      // Proposals are kept in a LabelMe file, and the format follows the file
+      fileFormat.current = 'labelme'
+      switchedFrom.current = null
+      if (formatRef.current !== 'labelme') {
+        formatRef.current = 'labelme'
+        setSettings((s) => ({ ...s, format: 'labelme' }))
+      }
       invalidate()
     }
     setImages((all) => all.map((i) => (i.name === name ? { ...i, ...summarize(found, true) } : i)))
@@ -825,7 +970,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     let flags = picked ? flagsFor(picked, config.label_flags) : {}
     let group_id: number | null = null
     let description = ''
-    if (config.display_label_popup || !picked) {
+    if (settingsRef.current.askLabel || !picked) {
       const choice = await askLabel({ text: picked ?? '', flags: null, group_id: null, description: null, at: screenMouse.current })
       if (!choice) {
         // labelme goes back to drawing, so a slip on the last click isn't the end of the shape
@@ -839,12 +984,14 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       description = choice.description
     }
     if (!label) return
-    const shape = newShape(label, type, points, { flags, group_id, description, ...extra })
+    const [shape] = forFormat([newShape(label, type, points, { flags, group_id, description, ...extra })])
     const next = [...shapesRef.current, shape]
     setShapes(next)
     setSelected([next.length - 1])
     const at = classes.findIndex((c) => c.name === label)
     if (at >= 0) setActiveClass(at)
+    // LabelImg's beginner mode: one shape, then back to editing
+    if (!settingsRef.current.advanced) setMode('edit')
   }
   const finishDraft = () => {
     const dr = draft.current
@@ -946,7 +1093,18 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     canvasRef.current!.focus()
     const p = toImage(e)
     const press = [e.clientX, e.clientY]
+    if (e.button === 2 && mode === 'edit' && !space.current && !readOnlyRef.current) {
+      // LabelImg's right drag: a copy follows the pointer, then Copy here or Move here. Elsewhere it pans.
+      const hit = hitShape(p)
+      if (hit >= 0) {
+        const sel = selectedRef.current.includes(hit) ? selectedRef.current : [hit]
+        if (!selectedRef.current.includes(hit)) setSelected([hit])
+        drag.current = { kind: 'ghost', shapes: sel, x: p[0], y: p[1], press, active: false }
+        return
+      }
+    }
     if (e.button === 1 || e.button === 2 || space.current) {
+      if (space.current) spaceTap.current = null
       drag.current = { kind: 'pan', x: e.clientX, y: e.clientY, press, button: e.button, moved: false }
       return
     }
@@ -974,7 +1132,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       if (dr) {
         const q = livePoint()!
         draft.current = null
-        const second = md === 'rectangle' && e.shiftKey ? squareFrom(dr.points[0], q) : q
+        const second = md === 'rectangle' && squareKeys(e) ? squareFrom(dr.points[0], q) : q
         if (Math.hypot(second[0] - dr.points[0][0], second[1] - dr.points[0][1]) > 0.5) finishShape(md, [dr.points[0], second])
         invalidate()
       } else if (onImage(p)) {
@@ -1056,6 +1214,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     mouse.current = p
     screenMouse.current = { x: e.clientX, y: e.clientY }
     shift.current = e.shiftKey
+    ctrl.current = e.ctrlKey || e.metaKey
     setCursor(p)
     overCanvas.current = true
     const d = drag.current
@@ -1073,7 +1232,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       if (draft.current || mode === 'brush' || mode === 'eraser' || (config.canvas.crosshair as Record<string, boolean>)[mode]) invalidate()
       return
     }
-    if ((d.kind === 'vertex' || d.kind === 'move' || d.kind === 'pan') && !('active' in d ? d.active : d.moved)) {
+    if ((d.kind === 'vertex' || d.kind === 'move' || d.kind === 'pan' || d.kind === 'ghost') && !('active' in d ? d.active : d.moved)) {
       // A slip of the hand during a click isn't a drag
       if (Math.hypot(e.clientX - d.press[0], e.clientY - d.press[1]) < DRAG_START) return
       if (d.kind === 'pan') d.moved = true
@@ -1092,11 +1251,21 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     } else if (d.kind === 'vertex' && m) {
       const s = d.start[d.shape]
       let q = clampPoint(p)
-      // Shift keeps a rectangle square while a corner moves, as in labelme
-      if (s.shape_type === 'rectangle' && e.shiftKey && s.points.length === 2) q = squareFrom(s.points[1 - d.vertex], q)
-      shapesRef.current = shapesRef.current.map((x, i) =>
-        i === d.shape ? { ...x, points: x.points.map((pt, k) => (k === d.vertex ? q : pt)) } : x
-      )
+      if (s.shape_type === 'rectangle' && s.points.length === 2) {
+        // Any of the four corners moves, the one across stays; square as when drawing it
+        if (squareKeys(e)) q = squareFrom(vertices(s)[(d.vertex + 2) % 4], q)
+        shapesRef.current = shapesRef.current.map((x, i) => (i === d.shape ? moveCorner(s, d.vertex, q) : x))
+      } else {
+        shapesRef.current = shapesRef.current.map((x, i) =>
+          i === d.shape ? { ...x, points: x.points.map((pt, k) => (k === d.vertex ? q : pt)) } : x
+        )
+      }
+    } else if (d.kind === 'ghost' && m) {
+      // The copy stays inside the image, as a move would
+      const list = shapesRef.current
+      const moved = moveShapes(list, d.shapes, p[0] - d.x, p[1] - d.y, m.width, m.height)
+      const first = d.shapes[0]
+      ghost.current = { shapes: d.shapes, dx: moved[first].points[0][0] - list[first].points[0][0], dy: moved[first].points[0][1] - list[first].points[0][1] }
     } else if (d.kind === 'move' && m) {
       const dx = p[0] - d.x, dy = p[1] - d.y
       const before = shapesRef.current
@@ -1125,7 +1294,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       const dr = draft.current
       if (dr && Math.hypot(e.clientX - d.press[0], e.clientY - d.press[1]) >= DRAG_START) {
         const q = livePoint()!
-        const second = mode === 'rectangle' && e.shiftKey ? squareFrom(dr.points[0], q) : q
+        const second = mode === 'rectangle' && squareKeys(e) ? squareFrom(dr.points[0], q) : q
         draft.current = null
         if (Math.hypot(second[0] - dr.points[0][0], second[1] - dr.points[0][1]) > 0.5) finishShape(mode as ShapeType, [dr.points[0], second])
       }
@@ -1143,6 +1312,12 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       apply(shapesRef.current.map((s, i) => (moved.has(i) && isAi(s) ? accepted(s) : s)))
     } else if (d.kind === 'pan' && d.button === 2 && !d.moved) {
       onOpenMenu(e.clientX, e.clientY)
+    } else if (d.kind === 'ghost') {
+      if (!d.active || !ghost.current) {
+        ghost.current = null
+        onOpenMenu(e.clientX, e.clientY)
+      } else setGhostMenu({ x: e.clientX, y: e.clientY })
+      invalidate()
     }
   }
 
@@ -1371,7 +1546,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   const paste = () => {
     if (!clipboard.current.length || readOnlyRef.current || !metaRef.current) return
     // Pasted onto a smaller image, shapes are kept inside it
-    const fitIn = clipboard.current.map((s) => ({ ...s, points: s.points.map(clampPoint) }))
+    const fitIn = forFormat(clipboard.current.map((s) => ({ ...s, points: s.points.map(clampPoint) })))
     const next = [...shapesRef.current, ...fitIn]
     setShapes(next)
     setSelected(fitIn.map((_, k) => next.length - fitIn.length + k))
@@ -1419,16 +1594,20 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   const deleteLabelFile = async () => {
     const name = loadedName.current
     if (!name) return
-    const file = await window.api.labelPath(root, name)
+    const file = await window.api.labelPath(root, name, formatRef.current)
     const answer = await window.api.ask(`Delete the label file of ${name}?`, `${file} goes to the trash.`, ['Delete', 'Cancel'])
     if (answer !== 0) return
     clearTimeout(saveTimer.current)
     pending.current = null
     dirty.current = false
     try {
-      await window.api.trashLabels(root, name)
+      await window.api.trashLabels(root, name, formatRef.current)
       history.current.delete(name)
-      setImages((all) => all.map((i) => (i.name === name ? { ...i, ...summarize([], false), broken: undefined } : i)))
+      fileFormat.current = null
+      switchedFrom.current = null
+      setImages((all) => all.map((i) => (i.name === name ? { ...i, ...summarize([], false), broken: undefined, verified: undefined } : i)))
+      verifiedRef.current = false
+      setVerifiedState(false)
       shapesRef.current = []
       setShapesState([])
       setSelected([])
@@ -1444,16 +1623,22 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   const saveAs = async () => {
     const name = loadedName.current
     if (!name || !metaRef.current) return
-    const target = await window.api.pickSave('Save labels as', await window.api.labelPath(root, name))
+    const target = await window.api.pickSave('Save labels as', await window.api.labelPath(root, name, formatRef.current), formatRef.current)
     if (!target) return
     saveTarget.current = target
-    pending.current = { name, shapes: shapesRef.current, flags: flagsRef.current, size: [metaRef.current.width, metaRef.current.height] }
+    pending.current = {
+      name, shapes: shapesRef.current, flags: flagsRef.current, size: [metaRef.current.width, metaRef.current.height], format: formatRef.current,
+      verified: verifiedRef.current, from: null
+    }
     await flush()
   }
   const saveNow = async () => {
     const name = loadedName.current
     if (!name || !metaRef.current || readOnlyRef.current) return
-    pending.current = { name, shapes: shapesRef.current, flags: flagsRef.current, size: [metaRef.current.width, metaRef.current.height] }
+    pending.current = {
+      name, shapes: shapesRef.current, flags: flagsRef.current, size: [metaRef.current.width, metaRef.current.height], format: formatRef.current,
+      verified: verifiedRef.current, from: switchedFrom.current
+    }
     await flush()
   }
 
@@ -1518,8 +1703,189 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     setProject({ ...project, classes: classes.map((c) => ({ name: c.name, color: c.name === name ? color : c.color })) })
   }
 
+  // LabelImg's Verify Image: a mark that the image has been checked, saved at once
+  const verifyImage = async () => {
+    if (!loadedName.current || !metaRef.current || readOnlyRef.current) return
+    if (!keepsVerified(formatRef.current)) return setNotice('YOLO files have no place to keep that an image is verified.')
+    verifiedRef.current = !verifiedRef.current
+    setVerifiedState(verifiedRef.current)
+    invalidate()
+    await saveNow()
+  }
+  /** LabelImg's difficult flag, on the selected shapes. Labels whose label_flags list it keep it, unticked. */
+  const toggleDifficult = () => {
+    const which = selectedRef.current
+    if (!which.length || readOnlyRef.current) return
+    const on = !which.every((i) => shapesRef.current[i]?.flags.difficult === true)
+    setShapes(shapesRef.current.map((s, i) => {
+      if (!which.includes(i)) return s
+      const { difficult: _d, ...rest } = s.flags
+      const listed = 'difficult' in flagsFor(s.label, config.label_flags)
+      return { ...s, flags: on ? { ...rest, difficult: true } : listed ? { ...rest, difficult: false } : rest }
+    }))
+  }
+  // LabelImg's format button: the image on screen is saved in the new format, and so are new label files
+  const setFormat = async (format: LabelFormat) => {
+    if (format === formatRef.current) return
+    if (images[index]?.embedded) return setNotice('This image lives inside its LabelMe file, so its labels stay LabelMe JSON.')
+    const name = loadedName.current
+    if (holdsBoxesOnly(format) && shapesRef.current.some(isAi)) return setNotice(`Accept or reject the AI shapes first: ${FORMAT_NAMES[format]} can't keep them apart.`)
+    // A switch saved a moment ago decides which file this one replaces, so it lands first
+    await lastSave.current
+    if (loadedName.current !== name || format === formatRef.current) return
+    if (name && metaRef.current && !readOnlyRef.current && await window.api.hasLabelsIn(root, name, format)) {
+      // The image has labels in that format already: they open, and nothing is converted or written over
+      if (loadedName.current !== name || !(await canLeave())) return
+      const was = fileFormat.current
+      formatRef.current = format
+      setSettings((s) => ({ ...s, format }))
+      undo.current = []
+      redo.current = []
+      setReload((n) => n + 1)
+      setNotice(`${name} has ${FORMAT_NAMES[format]} labels already, so they open as they are${was ? `, and its ${FORMAT_NAMES[was]} file stays` : ''}.`)
+      return
+    }
+    const list = shapesRef.current
+    formatRef.current = format
+    setSettings((s) => ({ ...s, format }))
+    if (!metaRef.current || readOnlyRef.current) return
+    // The file in the old format goes once the new one is written
+    if (fileFormat.current && fileFormat.current !== format) switchedFrom.current = fileFormat.current
+    else if (fileFormat.current === format) switchedFrom.current = null
+    const next = forFormat(list)
+    const boxed = next.filter((s, i) => s !== list[i]).length
+    if (boxed) {
+      setShapes(next)
+      setNotice(`${FORMAT_NAMES[format]} keeps boxes only: ${boxed} ${boxed === 1 ? 'shape became a box' : 'shapes became boxes'}.`)
+    } else if (images[index]?.labelled || list.length) queueSave()
+  }
+  /** Shapes from elsewhere take the place of this image's, clipped to it, as one step to undo */
+  const replaceShapes = (from: Shape[]) => {
+    const next = forFormat(from.map((s) => ({ ...s, points: s.points.map(clampPoint), hidden: undefined })))
+    setShapes(next)
+    setSelected(next.map((_, k) => k))
+  }
+  // LabelImg's Copy previous Bounding Boxes: the image before this one in the list lends its shapes
+  const copyPrevious = async () => {
+    const name = loadedName.current
+    const at = visible.findIndex((v) => v.i === index)
+    if (!name || !metaRef.current || readOnlyRef.current || at < 1) return
+    const prev = visible[at - 1].image.name
+    try {
+      const { doc } = await window.api.loadLabels(root, prev, formatRef.current)
+      if (loadedName.current !== name) return
+      if (!doc?.shapes.length) return setNotice(`${prev} has no shapes to copy.`)
+      replaceShapes(doc.shapes)
+    } catch (e) {
+      onError(`The labels of ${prev} can't be read: ${plainError(e)}`)
+    }
+  }
+  // LabelImg's Open Annotation: a label file picked by hand, read onto this image
+  const openAnnotation = async () => {
+    const name = loadedName.current, m = metaRef.current
+    if (!name || !m || readOnlyRef.current) return
+    const file = await window.api.pickFile('Open annotation', [{ name: 'Label files', extensions: ['xml', 'txt', 'json'] }])
+    if (!file || loadedName.current !== name) return
+    try {
+      const { doc } = await window.api.readLabelFile(root, name, file, [m.width, m.height])
+      if (loadedName.current !== name) return
+      if (!doc.shapes.length) return setNotice(`${file.split(/[\\/]/).pop()} has no shapes for ${name}.`)
+      replaceShapes(doc.shapes)
+    } catch (e) {
+      onError(`That file can't be read: ${plainError(e)}`)
+    }
+  }
+  // LabelImg's Delete Image, to the trash with its label files; the next image takes its place
+  const deleteImage = async () => {
+    const name = loadedName.current
+    if (!name || images[index]?.name !== name) return
+    const answer = await window.api.ask(`Move ${name} to the trash?`, 'Its label files go with it.', ['Move to trash', 'Cancel'])
+    if (answer !== 0 || loadedName.current !== name) return
+    clearTimeout(saveTimer.current)
+    pending.current = null
+    dirty.current = false
+    // Nothing more is saved for it, even an edit made while it goes
+    loadedName.current = ''
+    try {
+      const { kept } = await window.api.trashImage(root, name)
+      if (kept) onError(`${name} went to the trash, but ${kept}`)
+    } catch (e) {
+      loadedName.current = name
+      return onError(`It couldn't be moved to the trash: ${plainError(e)}`)
+    }
+    history.current.delete(name)
+    const left = images.length - 1
+    setImages((all) => all.filter((i) => i.name !== name))
+    setIndex((i) => Math.max(0, Math.min(i, left - 1)))
+    if (!left) {
+      metaRef.current = null
+      shapesRef.current = []
+      undo.current = []
+      redo.current = []
+      setMeta(null)
+      setShapesState([])
+      setSelected([])
+      invalidate()
+    }
+  }
+  // LabelImg's label filter above its box list: only shapes of one label show
+  const filterLabel = (label: string) => {
+    setLabelFilter(label)
+    const next = shapesRef.current.map((s) => ({ ...s, hidden: label && s.label !== label ? true : undefined }))
+    shapesRef.current = next
+    setShapesState(next)
+    invalidate()
+  }
+
+  /**
+   * Copy here or Move here, at the end of a right drag; null puts the copy away. The menu
+   * closes before a choice runs, so closing puts it away a moment later, when nothing was chosen.
+   */
+  const ghostDone = (how: 'copy' | 'move' | null) => {
+    const g = ghost.current
+    ghost.current = null
+    setGhostMenu(null)
+    invalidate()
+    if (!g || !how || readOnlyRef.current) return
+    const list = shapesRef.current
+    const shifted = (s: Shape) => ({ ...s, points: s.points.map(([x, y]) => [x + g.dx, y + g.dy]) })
+    if (how === 'copy') {
+      const copies = g.shapes.map((i) => shifted({ ...list[i], hidden: undefined }))
+      setShapes([...list, ...copies])
+      setSelected(copies.map((_, k) => list.length + k))
+      return
+    }
+    const moving = g.shapes.filter((i) => !list[i].locked)
+    if (moving.length < g.shapes.length) setNotice('Locked shapes stay: unlock them first.')
+    setShapes(list.map((s, i) => (moving.includes(i) ? accepted(shifted(s)) : s)))
+  }
+  // LabelImg's colours: the selected shapes' own line or fill colour, or the colour shapes are drawn in
+  const pickColor = (kind: 'line' | 'fill' | 'draw') => {
+    const first = shapesRef.current[selectedRef.current[0]]
+    const value = kind === 'draw'
+      ? settings.drawColor ?? (activeClass !== null ? classes[activeClass]?.color : undefined) ?? '#00ff00'
+      : ownColor(first?.other[kind === 'line' ? 'line_color' : 'fill_color']) ?? colorOf(first?.label ?? '')
+    setColorPrompt({ kind, value })
+  }
+  /** Saved in LabelMe files as labelme 3 and 4 kept them: [r, g, b, a]. null goes back to the label's colour. */
+  const setColor = (kind: 'line' | 'fill' | 'draw', value: string | null) => {
+    setColorPrompt(null)
+    if (kind === 'draw') return setSettings((s) => ({ ...s, drawColor: value }))
+    const which = selectedRef.current
+    const key = kind === 'line' ? 'line_color' : 'fill_color'
+    const rgba = value ? [1, 3, 5].map((k) => parseInt(value.slice(k, k + 2), 16)).concat(255) : null
+    setShapes(shapesRef.current.map((s, i) => {
+      if (!which.includes(i)) return s
+      const { [key]: _old, ...other } = s.other
+      return { ...s, other: rgba ? { ...other, [key]: rgba } : other }
+    }))
+  }
+
   const has = () => !!metaRef.current && !readOnlyRef.current
   const sel = () => selectedRef.current.length > 0
+  const boxesOnly = holdsBoxesOnly(settings.format)
+  /** Tools for shapes other than boxes are off in LabelImg's formats */
+  const draws = (m: Mode) => () => has() && (!boxesOnly || BOX_MODES.has(m))
   const commands: Commands = {
     open_next: { label: 'Next image', run: () => go(1), shortcut: 'open_next', enabled: () => images.length > 1 },
     open_prev: { label: 'Previous image', run: () => go(-1), shortcut: 'open_prev', enabled: () => images.length > 1 },
@@ -1530,23 +1896,24 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     store_data: { label: 'Save with image data', run: () => setSettings((s) => ({ ...s, storeData: !s.storeData })), checked: () => settings.storeData },
     reveal: { label: 'Show in folder', run: () => loadedName.current && window.api.reveal(root, loadedName.current), enabled: () => !!loadedName.current },
 
-    create_polygon: { label: 'Create polygons', run: () => setMode('polygon'), shortcut: 'create_polygon', checked: () => mode === 'polygon', enabled: has },
+    create_polygon: { label: 'Create polygons', run: () => setMode('polygon'), shortcut: 'create_polygon', checked: () => mode === 'polygon', enabled: draws('polygon') },
     create_rectangle: { label: 'Create rectangle', run: () => setMode('rectangle'), shortcut: 'create_rectangle', checked: () => mode === 'rectangle', enabled: has },
-    create_circle: { label: 'Create circle', run: () => setMode('circle'), shortcut: 'create_circle', checked: () => mode === 'circle', enabled: has },
-    create_line: { label: 'Create line', run: () => setMode('line'), shortcut: 'create_line', checked: () => mode === 'line', enabled: has },
-    create_point: { label: 'Create point', run: () => setMode('point'), shortcut: 'create_point', checked: () => mode === 'point', enabled: has },
-    create_linestrip: { label: 'Create line strip', run: () => setMode('linestrip'), shortcut: 'create_linestrip', checked: () => mode === 'linestrip', enabled: has },
+    create_circle: { label: 'Create circle', run: () => setMode('circle'), shortcut: 'create_circle', checked: () => mode === 'circle', enabled: draws('circle') },
+    create_line: { label: 'Create line', run: () => setMode('line'), shortcut: 'create_line', checked: () => mode === 'line', enabled: draws('line') },
+    create_point: { label: 'Create point', run: () => setMode('point'), shortcut: 'create_point', checked: () => mode === 'point', enabled: draws('point') },
+    create_linestrip: { label: 'Create line strip', run: () => setMode('linestrip'), shortcut: 'create_linestrip', checked: () => mode === 'linestrip', enabled: draws('linestrip') },
     create_ai_polygon: { label: 'Create AI polygon', run: () => setMode('ai_polygon'), shortcut: 'create_ai_polygon', checked: () => mode === 'ai_polygon', enabled: () => has() && !!models },
     create_ai_mask: { label: 'Create AI mask', run: () => setMode('ai_mask'), shortcut: 'create_ai_mask', checked: () => mode === 'ai_mask', enabled: () => has() && !!models },
-    create_brush: { label: 'Brush', run: () => setMode('brush'), shortcut: 'create_brush', checked: () => mode === 'brush', enabled: has },
-    create_eraser: { label: 'Eraser', run: () => setMode('eraser'), shortcut: 'create_eraser', checked: () => mode === 'eraser', enabled: has },
+    create_brush: { label: 'Brush', run: () => setMode('brush'), shortcut: 'create_brush', checked: () => mode === 'brush', enabled: draws('brush') },
+    create_eraser: { label: 'Eraser', run: () => setMode('eraser'), shortcut: 'create_eraser', checked: () => mode === 'eraser', enabled: draws('eraser') },
+    draw_squares: { label: 'Draw squares', run: () => setSettings((s) => ({ ...s, drawSquares: !s.drawSquares })), shortcut: 'draw_squares', checked: () => settings.drawSquares },
     edit_polygon: { label: 'Edit polygons', run: () => setMode('edit'), shortcut: 'edit_polygon', checked: () => mode === 'edit' },
     edit_label: { label: 'Edit label…', run: () => editLabel(), shortcut: 'edit_label', enabled: () => has() && sel() },
     duplicate_polygon: { label: 'Duplicate', run: duplicate, shortcut: 'duplicate_polygon', enabled: () => has() && sel() },
     copy_polygon: { label: 'Copy', run: copySelected, shortcut: 'copy_polygon', enabled: sel },
     paste_polygon: { label: 'Paste', run: paste, shortcut: 'paste_polygon', enabled: () => has() && clipboard.current.length > 0 },
     delete_polygon: { label: 'Delete', run: removeSelected, shortcut: 'delete_polygon', enabled: () => has() && sel() },
-    merge_polygons: { label: 'Merge polygons', run: merge, shortcut: 'merge_polygons', enabled: () => has() && selectedRef.current.length >= 2 },
+    merge_polygons: { label: 'Merge polygons', run: merge, shortcut: 'merge_polygons', enabled: () => has() && selectedRef.current.length >= 2 && !boxesOnly },
     undo: { label: 'Undo', run: () => (undoLastPoint() || stepHistory(undo, redo)), shortcut: 'undo', enabled: () => has() && (undo.current.length > 0 || !!draft.current || !!reviewBack.current) },
     redo: { label: 'Redo', run: () => stepHistory(redo, undo), shortcut: 'redo', enabled: () => has() && redo.current.length > 0 },
     remove_selected_point: { label: 'Remove point', run: removeHoveredPoint, shortcut: 'remove_selected_point', enabled: has },
@@ -1559,7 +1926,22 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       },
       enabled: () => has() && sel(), checked: () => sel() && selectedRef.current.every((i) => shapesRef.current[i]?.locked)
     },
+    toggle_difficult: {
+      label: 'Difficult', run: toggleDifficult, shortcut: 'toggle_difficult', enabled: () => has() && sel() && keepsDifficult(settings.format),
+      checked: () => sel() && selectedRef.current.every((i) => shapesRef.current[i]?.flags.difficult === true)
+    },
+    verify_image: { label: 'Verify image', run: verifyImage, shortcut: 'verify_image', checked: () => verified, enabled: () => has() && keepsVerified(settings.format) },
     toggle_keep_prev_mode: { label: 'Keep previous annotation', run: () => setSettings((s) => ({ ...s, keepPrev: !s.keepPrev })), shortcut: 'toggle_keep_prev_mode', checked: () => settings.keepPrev },
+    copy_previous_shapes: { label: "Copy previous image's shapes", run: copyPrevious, shortcut: 'copy_previous_shapes', enabled: () => has() && visible.findIndex((v) => v.i === index) > 0 },
+    single_class_mode: { label: 'Single class mode', run: () => setSettings((s) => ({ ...s, askLabel: !s.askLabel })), shortcut: 'single_class_mode', checked: () => !settings.askLabel },
+    open_annotation: { label: 'Open annotation…', run: openAnnotation, shortcut: 'open_annotation', enabled: has },
+    delete_image: { label: 'Delete image', run: deleteImage, shortcut: 'delete_image', enabled: () => !!images[index] && !images[index].embedded },
+    change_format: { label: 'Next save format', run: () => setFormat(NEXT_FORMAT[settings.format]), shortcut: 'change_format', enabled: () => !images[index]?.embedded },
+    display_labels: { label: 'Display labels', run: () => setSettings((s) => ({ ...s, displayLabels: !s.displayLabels })), shortcut: 'display_labels', checked: () => settings.displayLabels },
+    advanced_mode: { label: 'Advanced mode', run: () => setSettings((s) => ({ ...s, advanced: !s.advanced })), shortcut: 'advanced_mode', checked: () => settings.advanced },
+    box_line_color: { label: 'Box line colour…', run: () => pickColor('draw'), shortcut: 'box_line_color' },
+    shape_line_color: { label: 'Shape line colour…', run: () => pickColor('line'), shortcut: 'shape_line_color', enabled: () => has() && sel() },
+    shape_fill_color: { label: 'Shape fill colour…', run: () => pickColor('fill'), shortcut: 'shape_fill_color', enabled: () => has() && sel() },
 
     fill_drawing: { label: 'Fill polygon while drawing', run: () => setSettings((s) => ({ ...s, fillDrawing: !s.fillDrawing })), checked: () => settings.fillDrawing },
     hide_all_polygons: { label: 'Hide shapes', run: () => setShowShapes(false), shortcut: 'hide_all_polygons' },
@@ -1580,13 +1962,16 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     review_accept_all: { label: 'Accept all here, then next', run: acceptAll, shortcut: 'review_accept_all' },
     order_certainty: { label: 'Least certain first', run: () => setSort((s) => (s === 'certainty' ? 'name' : 'certainty')), checked: () => sort === 'certainty' },
     prelabel_pick: { label: 'Choose a model…', run: pickModel },
-    prelabel_one: { label: 'Pre-label this image', run: prelabelOne, enabled: () => has() && !batch && !busyAi },
-    prelabel_all: { label: `Pre-label ${toPrelabel.length} images`, run: prelabelAll, enabled: () => !batch && toPrelabel.length > 0 },
+    prelabel_one: { label: 'Pre-label this image', run: prelabelOne, enabled: () => has() && !batch && !busyAi && !boxesOnly },
+    prelabel_all: { label: `Pre-label ${toPrelabel.length} images`, run: prelabelAll, enabled: () => !batch && toPrelabel.length > 0 && !boxesOnly },
     brush_smaller: { label: 'Smaller brush', run: () => setBrushSize((s) => Math.max(config.brush.min, s - 4)), shortcut: 'brush_smaller' },
     brush_larger: { label: 'Larger brush', run: () => setBrushSize((s) => Math.min(config.brush.max, s + 4)), shortcut: 'brush_larger' }
   }
   for (const m of models ?? []) {
     commands[`ai_model:${m.name}`] = { label: m.title, run: () => setSettings((s) => ({ ...s, aiModel: m.name })), checked: () => settings.aiModel === m.name }
+  }
+  for (const f of LABEL_FORMATS) {
+    commands[`format:${f}`] = { label: FORMAT_NAMES[f], run: () => setFormat(f), checked: () => settings.format === f, enabled: () => !images[index]?.embedded }
   }
   const commandsRef = useRef(commands)
   commandsRef.current = commands
@@ -1599,11 +1984,40 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
-      if (dialog || pointsPrompt || bcOpen) return
+      if (dialog || pointsPrompt || bcOpen || colorPrompt || ghostMenu || document.querySelector('.modal-back, .context')) {
+        // Keys let go meanwhile still count, so Space or Shift isn't left held down
+        if (e.type === 'keyup') {
+          if (e.code === 'Space') { space.current = false; spaceTap.current = null }
+          if (e.key === 'Shift') shift.current = false
+          if (e.key === 'Control' || e.key === 'Meta') ctrl.current = false
+        }
+        return
+      }
       if (target.closest?.('.menubar, .menu')) return
       if (target.tagName === 'SELECT' || target.tagName === 'TEXTAREA' || (target.tagName === 'INPUT' && (target as HTMLInputElement).type !== 'range' && (target as HTMLInputElement).type !== 'checkbox')) return
-      if (e.code === 'Space') { space.current = e.type === 'keydown'; e.preventDefault(); return }
+      if (e.code === 'Space') {
+        e.preventDefault()
+        if (e.type === 'keydown') {
+          if (!e.repeat && !space.current) spaceTap.current = Date.now()
+          space.current = true
+          return
+        }
+        space.current = false
+        const pressed = spaceTap.current
+        spaceTap.current = null
+        // Held a while, it was meant for panning
+        if (pressed === null || Date.now() - pressed > 500 || drag.current || dialog || pointsPrompt || bcOpen || colorPrompt || ghostMenu) return
+        // Space+drag pans; a tap runs the command set to Space, such as LabelImg's Verify Image
+        for (const cmd of Object.values(commandsRef.current)) {
+          if (cmd.shortcut && shortcutList(config.shortcuts[cmd.shortcut]).some((k) => matches(k, e, mac))) {
+            if (!cmd.enabled || cmd.enabled()) cmd.run()
+            return
+          }
+        }
+        return
+      }
       if (e.key === 'Shift') { shift.current = e.type === 'keydown'; invalidate() }
+      if (e.key === 'Control' || e.key === 'Meta') { ctrl.current = e.type === 'keydown'; invalidate() }
       if (e.type !== 'keydown') return
       // Nothing may change the image, tool or shapes under a drag in progress
       if (drag.current && e.key !== 'Escape') return
@@ -1659,6 +2073,21 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKey) }
   })
 
+  // LabelImg's box size in the status bar: the box being drawn, moved, pointed at or selected
+  const boxSize = (() => {
+    const list = shapesRef.current
+    const d = drag.current
+    const live = livePoint()
+    let s: Shape | null | undefined = null
+    if (draft.current && live && (mode === 'rectangle' || mode === 'circle')) s = draftShape(live)
+    else if (d?.kind === 'vertex' || d?.kind === 'move') s = list[d.kind === 'vertex' ? d.shape : d.shapes[0]]
+    else if (hover.current && mode === 'edit') s = list[hover.current.shape]
+    else if (selected.length === 1) s = list[selected[0]]
+    if (!s?.points.length || s.shape_type === 'point') return ''
+    const [x0, y0, x1, y1] = boxOf(s)
+    return `${Math.round(x1 - x0)} × ${Math.round(y1 - y0)}`
+  })()
+  const shapeLabels = [...new Set(shapes.map((s) => s.label))].sort((a, b) => a.localeCompare(b))
   const aiCount = shapes.filter(isAi).length
   const counts = useMemo(() => {
     const out: Record<string, number> = {}
@@ -1677,13 +2106,13 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   const current = selected.length === 1 && shapes[selected[0]] && isAi(shapes[selected[0]]) ? shapes[selected[0]] : null
   const flagKeys = Object.keys(imageFlags)
   const tool = (m: Mode, icon: React.ReactNode, title: string, cmd: string) => (
-    <button className={mode === m ? 'on' : ''} onClick={() => setMode(m)} disabled={!!readOnly && m !== 'edit'}
+    <button className={mode === m ? 'on' : ''} onClick={() => setMode(m)} disabled={(!!readOnly && m !== 'edit') || (boxesOnly && !BOX_MODES.has(m))}
       title={`${title}${commands[cmd]?.shortcut ? ` (${(shortcutList(config.shortcuts[commands[cmd].shortcut!])[0]?.key ?? '').toUpperCase()})` : ''}`} aria-label={title}>{icon}</button>
   )
   const modeHint: Record<Mode, string> = {
     edit: 'Click to select, Ctrl+click for more · drag to move · Alt+click an edge adds a point, a point removes it',
     polygon: 'Click to add points · click the first point, Enter or double-click to close',
-    rectangle: 'Drag, or click two corners · Shift for a square',
+    rectangle: 'Drag, or click two corners · Shift or Ctrl for a square',
     circle: 'Click the centre, then a point on the edge',
     line: 'Click both ends',
     point: 'Click to place a point',
@@ -1723,6 +2152,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
                 <i className={image.broken ? 'dot broken' : image.ai ? 'dot ai' : image.labelled ? 'dot done' : 'dot'}
                   title={image.broken ? "Its label file can't be read" : image.ai ? 'AI shapes to review' : image.labelled ? 'Labelled' : 'Not labelled yet'} />
                 <span className="name">{image.name}</span>
+                {image.verified && <BadgeCheck size={13} className="verified" aria-label="Verified" />}
                 {image.ai > 0 && image.score !== null && <span className="certainty">{percent(image.score)}</span>}
                 {image.labelled && !image.ai && <span className="muted">{image.count}</span>}
               </button>
@@ -1735,7 +2165,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
               <X size={15} /> Stop · {batch.done} / {batch.total}
             </button>
           ) : (
-            <button className="ghost batch" onClick={prelabelAll} disabled={!toPrelabel.length || !!busyAi}
+            <button className="ghost batch" onClick={prelabelAll} disabled={!toPrelabel.length || !!busyAi || boxesOnly}
               title={prelabelModel ? `Run ${prelabelModel.name} on every image with no label file or only AI shapes` : 'Choose a segmentation model (.onnx), then pre-label'}>
               <Sparkles size={15} /> Pre-label {toPrelabel.length} {toPrelabel.length === 1 ? 'image' : 'images'}
             </button>
@@ -1788,7 +2218,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
           )}
           <div className="spacer" />
           <span className="zoom" title="Zoom">{Math.round(zoom * 1000) / 10}%</span>
-          <button className="ghost" onClick={prelabelOne} disabled={!!busyAi || !!batch || !!readOnly}
+          <button className="ghost" onClick={prelabelOne} disabled={!!busyAi || !!batch || !!readOnly || boxesOnly}
             title={prelabelModel ? `Pre-label with ${prelabelModel.name}` : 'Choose a segmentation model (.onnx), then pre-label this image'}>
             <Sparkles size={15} /> {busyAi === 'Predicting…' ? 'Predicting…' : 'Pre-label'}
           </button>
@@ -1821,9 +2251,18 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
         </div>
         <footer className="status">
           <span>{images[index]?.name}</span>
+          {images.length > 0 && <span className="muted" data-testid="counter">{index + 1} / {images.length}</span>}
           {meta && <span>{meta.width} × {meta.height}</span>}
           {cursor && meta && <span>{Math.round(cursor[0])}, {Math.round(cursor[1])}</span>}
+          {boxSize && <span data-testid="box-size">box {boxSize}</span>}
           <span className="muted">{MODE_NAMES[mode]}</span>
+          {meta && (
+            <button className={`verify ${verified ? 'verified' : 'muted'}`} onClick={verifyImage} disabled={!!readOnly || !keepsVerified(settings.format)}
+              title={keepsVerified(settings.format) ? 'Verify image: mark it as checked (Space)' : "YOLO files can't keep a verified mark"}
+              aria-label="Verify image" aria-pressed={verified}>
+              <BadgeCheck size={13} /> {verified ? 'Verified' : 'Verify'}
+            </button>
+          )}
           <div className="spacer" />
           <span data-testid="save-state">{readOnly ? 'Read only' : saved === 'saved' ? 'Saved' : saved === 'saving' ? 'Saving…' : settings.autoSave ? 'Saving…' : 'Not saved'}</span>
           <span className="muted hint">{modeHint[mode]}</span>
@@ -1871,7 +2310,15 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
           )}
           {settings.docks.shapes && (
             <section className="grow" aria-label="Shapes">
-              <h3>Shapes <span className="muted">{shapes.length}</span></h3>
+              <h3>Shapes
+                {shapeLabels.length > 1 ? (
+                  <select className="label-filter" value={labelFilter} aria-label="Show shapes of"
+                    onChange={(e) => { filterLabel(e.target.value); e.target.blur() }}>
+                    <option value="">All {shapes.length}</option>
+                    {shapeLabels.map((l) => <option key={l} value={l}>{l} {counts[l]}</option>)}
+                  </select>
+                ) : <span className="muted">{shapes.length}</span>}
+              </h3>
               <div className="shapes" role="listbox" aria-multiselectable>
                 {shapes.map((s, i) => (
                   <div key={i} role="option" aria-selected={selected.includes(i)} draggable={!readOnly}
@@ -1909,6 +2356,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
                     <i style={{ background: colorOf(s.label) }} />
                     <span className="name">{s.label}{s.group_id !== null ? ` (${s.group_id})` : ''}</span>
                     {s.locked && <Lock size={12} className="muted" aria-label="Locked" />}
+                    {s.flags.difficult === true && <span className="tag difficult">difficult</span>}
                     {isAi(s) && <span className="tag">AI{scoreOf(s) !== undefined ? ` ${percent(scoreOf(s)!)}` : ''}</span>}
                     <span className="muted">{describe(s)}</span>
                   </div>
@@ -1916,7 +2364,12 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
                 {!shapes.length && <p className="muted pad">Nothing yet. Click on the image to start a polygon.</p>}
               </div>
               {selected.length > 0 && !readOnly && (
-                <button className="ghost danger" onClick={removeSelected}><Trash2 size={15} /> Delete {selected.length > 1 ? `${selected.length} shapes` : 'shape'}</button>
+                <div className="row selection">
+                  <label className="check" title={keepsDifficult(settings.format) ? 'Hard to recognise without context, as Pascal VOC marks it' : `${FORMAT_NAMES[settings.format]} doesn't keep it`}>
+                    <input type="checkbox" checked={!!commands.toggle_difficult.checked?.()} disabled={!keepsDifficult(settings.format)} onChange={toggleDifficult} /> Difficult
+                  </label>
+                  <button className="ghost danger" onClick={removeSelected}><Trash2 size={15} /> Delete {selected.length > 1 ? `${selected.length} shapes` : 'shape'}</button>
+                </div>
               )}
             </section>
           )}
@@ -1971,6 +2424,27 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
             </div>
           </div>
         </div>
+      )}
+      {colorPrompt && (
+        <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && setColorPrompt(null)}>
+          <form className="dialog small" role="dialog" aria-label={COLOR_TITLES[colorPrompt.kind]}
+            onSubmit={(e) => { e.preventDefault(); setColor(colorPrompt.kind, colorPrompt.value) }}
+            onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Escape') setColorPrompt(null) }}>
+            <label className="slider wide">{COLOR_TITLES[colorPrompt.kind]}
+              <input type="color" value={colorPrompt.value} aria-label="Colour" autoFocus onChange={(e) => setColorPrompt({ ...colorPrompt, value: e.target.value })} />
+            </label>
+            <div className="actions">
+              <button type="button" className="ghost" onClick={() => setColor(colorPrompt.kind, null)}>Label's colour</button>
+              <button type="button" className="ghost" onClick={() => setColorPrompt(null)}>Cancel</button>
+              <button className="primary">OK</button>
+            </div>
+          </form>
+        </div>
+      )}
+      {ghostMenu && (
+        <ContextMenu at={ghostMenu} items={['copy_here', 'move_here']} config={config} mac={mac}
+          commands={{ copy_here: { label: 'Copy here', run: () => ghostDone('copy') }, move_here: { label: 'Move here', run: () => ghostDone('move') } }}
+          onDone={() => setTimeout(() => ghost.current && ghostDone(null))} />
       )}
     </div>
   )

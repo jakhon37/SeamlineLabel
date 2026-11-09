@@ -64,6 +64,25 @@ async function prune(dir: string) {
   }
 }
 
+/** The image's size as the window shows it, upright */
+export async function imageSize(root: string, name: string): Promise<[number, number]> {
+  const file = isEmbedded(root, name) ? await embeddedFile(imagePath(root, name)) : imagePath(root, name)
+  if (path.extname(file).toLowerCase() === '.bmp') {
+    const { width, height } = await bmpSize(file)
+    return [width, height]
+  }
+  const info = await sharp(file, { limitInputPixels: false }).metadata()
+  return (info.orientation ?? 1) >= 5 ? [info.height!, info.width!] : [info.width!, info.height!]
+}
+
+/** Pascal VOC's depth, as LabelImg writes it: 1 for a grey image, 3 for colour */
+export async function imageDepth(root: string, name: string): Promise<number> {
+  const file = imagePath(root, name)
+  if (path.extname(file).toLowerCase() === '.bmp') return 3
+  const info = await sharp(file, { limitInputPixels: false }).metadata()
+  return (info.channels ?? 3) <= 2 ? 1 : 3
+}
+
 export async function openImage(root: string, name: string): Promise<OpenImage> {
   const started = Date.now()
   const file = isEmbedded(root, name) ? await embeddedFile(imagePath(root, name)) : imagePath(root, name)

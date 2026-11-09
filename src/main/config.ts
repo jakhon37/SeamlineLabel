@@ -38,7 +38,9 @@ export type Args = {
   help: boolean
 }
 
-export const USAGE = `Usage: seamtag [options] [image, label file or folder]
+export const USAGE = `Usage: seamtag [options] [image, label file or folder] [class file] [save folder]
+
+  The class file and save folder are LabelImg's: the same as --labels FILE and --output DIR.
 
   -h, --help            show this help
   -V, --version         show the version
@@ -67,6 +69,7 @@ function listOrFile(value: string): string[] {
 /** labelme's command line. Flags Electron or Chromium add are passed over. */
 export function parseArgs(argv: string[]): Args {
   const args: Args = { filename: null, output: null, config: null, overrides: {}, resetConfig: false, version: false, help: false }
+  const positional: string[] = []
   const takes = (i: number) => {
     if (i + 1 >= argv.length) throw new Error(`${argv[i]} needs a value`)
     return argv[i + 1]
@@ -106,9 +109,18 @@ export function parseArgs(argv: string[]): Args {
       }
       case '--logger-level': args.overrides.logger_level = value().toLowerCase(); break
       default:
-        if (!raw.startsWith('-') && args.filename === null) args.filename = raw
+        if (raw.startsWith('-')) break
+        // LabelImg's command line: an image folder, then a file of classes, then where labels go
+        positional.push(raw)
     }
   }
+  const [filename, classes, saveDir] = positional
+  if (filename !== undefined) args.filename = filename
+  if (classes !== undefined) {
+    if (!existsSync(classes)) throw new Error(`The class file ${classes} doesn't exist`)
+    args.overrides.labels = listOrFile(classes)
+  }
+  if (saveDir !== undefined && args.output === null) args.output = saveDir
   return args
 }
 

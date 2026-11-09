@@ -5,7 +5,7 @@ import sharp from 'sharp'
 import { FORMAT_VERSION, isAi, newShape, serializeLabelFile, type Shape } from '../shared/labelfile'
 import { rgbPixels } from './images'
 import { outerRings, simplifyRing } from './masks'
-import { imagePath, labelPath, readDoc, serial, writeAtomic } from './project'
+import { findLabels, imagePath, labelPath, readDoc, serial, writeAtomic } from './project'
 
 // Seamline's pre-labelling, for a segmentation model exported to ONNX: the image goes through
 // tile by tile, each pixel takes its most likely class, and each blob of a class becomes an
@@ -205,8 +205,10 @@ export async function prelabel(root: string, file: string, names: string[], clas
         const out = labelPath(root, name)
         const image = imagePath(root, name)
         shapes = await serial(async () => {
+          // Someone labelled it meanwhile, in any format: their labels win
+          const existing = await findLabels(root, name)
+          if (existing && existing.format !== 'labelme') return null
           const doc = await readDoc(out)
-          // Someone labelled it meanwhile: their shapes win
           if (doc?.shapes.some((s) => !isAi(s))) return null
           const meta = await sharp(image, { limitInputPixels: false }).metadata()
           const swapped = (meta.orientation ?? 1) >= 5

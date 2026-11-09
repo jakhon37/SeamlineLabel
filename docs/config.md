@@ -57,6 +57,7 @@ shortcuts:
 | `canvas.wheel` | `zoom` | The wheel zooms. `scroll`: it scrolls, as in labelme, and zooms with Ctrl. |
 | `brush.size`, `brush.min`, `brush.max` | `28`, `4`, `200` | The brush and eraser, in screen pixels. |
 | `prelabel.min_area` | `20` | Proposed shapes smaller than this, in pixels, are dropped. |
+| `label_format` | `labelme` | The format new label files are saved in: `labelme`, or LabelImg's `voc` (Pascal VOC), `yolo` or `createml`. An image that has a label file keeps that file's format, as in LabelImg. |
 
 ## Shortcuts
 
@@ -65,7 +66,7 @@ Written as Qt writes them, a key or a list of keys, `null` for none. As in Qt, `
 | Key | Default |
 |---|---|
 | `open`, `open_dir`, `close`, `quit` | `Ctrl+O`, `Ctrl+U`, `Ctrl+W`, `Ctrl+Q` |
-| `save`, `save_as`, `save_to`, `delete_file` | `Ctrl+S`, `Ctrl+Shift+S`, none, `Ctrl+Delete` |
+| `save`, `save_as`, `save_to`, `delete_file` | `Ctrl+S`, `Ctrl+Shift+S`, `Ctrl+R`, `Ctrl+Delete` |
 | `open_next`, `open_prev` | `[D, Ctrl+Shift+D]`, `[A, Ctrl+Shift+A]` |
 | `zoom_in`, `zoom_out`, `zoom_to_original` | `[Ctrl++, Ctrl+=]`, `Ctrl+-`, `Ctrl+0` |
 | `fit_window`, `fit_width` | `[Ctrl+F, 0]`, `Ctrl+Shift+F` |
@@ -73,13 +74,58 @@ Written as Qt writes them, a key or a list of keys, `null` for none. As in Qt, `
 | `create_circle`, `create_line`, `create_point`, `create_linestrip` | none |
 | `create_ai_polygon`, `create_ai_mask` | none |
 | `create_brush`, `create_eraser` | `B`, `E` |
-| `edit_polygon`, `edit_label` | `[Ctrl+Shift+C, V]`, `Ctrl+Shift+X` |
+| `edit_polygon`, `edit_label` | `[Ctrl+Shift+C, V, Ctrl+J]`, `[Ctrl+Shift+X, Ctrl+E]` |
 | `delete_polygon`, `duplicate_polygon`, `copy_polygon`, `paste_polygon` | `Delete`, `Ctrl+D`, `Ctrl+C`, `Ctrl+V` |
 | `undo`, `redo`, `undo_last_point` | `Ctrl+Z`, `[Ctrl+Shift+Z, Ctrl+Y]`, `Ctrl+Z` |
 | `remove_selected_point`, `add_multiple_points`, `merge_polygons` | `[Meta+H, Backspace]`, `Ctrl+M`, `Ctrl+Shift+M` |
 | `toggle_keep_prev_mode` | `Ctrl+P` |
-| `show_all_polygons`, `hide_all_polygons`, `toggle_all_polygons` | none, none, `F` |
+| `show_all_polygons`, `hide_all_polygons`, `toggle_all_polygons` | `Ctrl+A`, `Ctrl+H`, `F` |
 | `review_accept`, `review_accept_all`, `review_reject`, `review_skip` | `W`, `Shift+W`, `S`, `Tab` |
 | `brush_smaller`, `brush_larger` | `[`, `]` |
 
-`1` to `9` pick a label, arrow keys move the selection (Shift for 10 pixels), and `Escape` cancels what's being drawn.
+LabelImg's commands:
+
+| Key | Default |
+|---|---|
+| `verify_image`, `toggle_difficult` | `Space`, none. Space is a tap: held while dragging, it pans. |
+| `open_annotation`, `copy_previous_shapes`, `delete_image` | `Ctrl+Shift+O`, none, `Ctrl+Shift+Delete` |
+| `change_format` | none. Each press moves to the next format, as LabelImg's format button does. |
+| `draw_squares`, `display_labels`, `toggle_label_panel` | `Ctrl+Shift+R`, `Ctrl+Shift+P`, `Ctrl+Shift+L` |
+| `single_class_mode`, `advanced_mode` | none |
+| `box_line_color`, `shape_line_color`, `shape_fill_color` | `Ctrl+L`, none, none |
+
+`1` to `9` pick a label, arrow keys move the selection (Shift for 10 pixels), and `Escape` cancels what's being drawn. On a Mac, macOS keeps ⌘H and ⌘A for itself, so there `F` shows and hides shapes.
+
+## LabelImg's keys
+
+Where LabelImg and labelme give a key different jobs, Seamtag keeps labelme's: `W` accepts an AI proposal, `Ctrl+V` pastes, `Ctrl+Y` redoes, `Ctrl+Shift+D` and `Ctrl+Shift+A` copy the shapes over to the next or previous image, and `Ctrl+=` zooms in. These lines in `~/.seamtagrc` give those keys LabelImg's jobs and move the others aside:
+
+```yaml
+# LabelImg's keys
+shortcuts:
+  create_rectangle: [W, R]
+  review_accept: Y
+  review_accept_all: Shift+Y
+  copy_previous_shapes: Ctrl+V
+  paste_polygon: Ctrl+Alt+V
+  change_format: Ctrl+Y
+  redo: Ctrl+Shift+Z
+  delete_image: Ctrl+Shift+D
+  open_next: D
+  advanced_mode: Ctrl+Shift+A
+  open_prev: A
+  zoom_in: Ctrl++
+  zoom_to_original: [Ctrl+0, Ctrl+=]
+```
+
+LabelImg's `Ctrl+Shift+S` for Single Class Mode stays Save As, as LabelImg's own Save As has it too.
+
+## Files in LabelImg's formats
+
+| Format | Each image's file | |
+|---|---|---|
+| Pascal VOC | `name.xml` | Boxes with their labels and the difficult flag; the image's verified mark. |
+| YOLO | `name.txt`, and `classes.txt` beside it | Each box as a class number and its centre and size, as shares of the image. `classes.txt` names the classes in order: new labels are added at its end, so the numbers in files already saved stay right. A `.txt` file counts as YOLO's only beside a `classes.txt`. |
+| CreateML | `name.json` | A list of images, each with its boxes and verified mark, named by file name. `-O labels.json` keeps every image in one list, named by its path in the folder, so images of the same name in different folders stay apart. |
+
+The files are written as LabelImg 1.8.6 writes them: boxes saved in Pascal VOC and YOLO are whole pixels, starting from 1. In an output folder, label files keep the folders their images are in. Files labelme or LabelImg left straight in it, by image file name, open too, except where images in different folders share that name. Group IDs, descriptions, flags other than difficult, and image flags have no place in these files. A file that can't be read in its format is shown read-only and never written over.

@@ -1,8 +1,8 @@
 import { expect, test } from 'vitest'
 import { newShape } from '../../src/shared/labelfile'
 import {
-  addPointsToEdge, bounds, canRemovePoint, contains, insertPoint, mergePolygons, moveShapes, nearestEdge, nearestVertex,
-  squareFrom, toEdge
+  addPointsToEdge, bounds, canRemovePoint, contains, insertPoint, mergePolygons, moveCorner, moveShapes, nearestEdge, nearestVertex,
+  squareFrom, toEdge, vertices
 } from '../../src/renderer/src/shapes'
 
 const square = (x0: number, y0: number, x1: number, y1: number, label = 'a') =>
@@ -51,6 +51,20 @@ test('moving stops at the image edge, for the whole selection together', () => {
   expect(moved[1].points[1]).toEqual([100, 10])
   expect(moved[0].points[0]).toEqual([20, 10])
   expect(moveShapes(shapes, [1], 0, 0, 100, 100)).toBe(shapes)
+})
+
+test("all four corners of a box move, as in LabelImg; the box stays two points, as labelme keeps it", () => {
+  const box = newShape('a', 'rectangle', [[10, 20], [50, 60]])
+  expect(vertices(box)).toEqual([[10, 20], [50, 20], [50, 60], [10, 60]])
+  expect(nearestVertex(box, [49, 59], 3)).toBe(2)
+  expect(nearestVertex(box, [11, 59], 3)).toBe(3)
+  // Each corner, moved: the one across stays where it was
+  expect(moveCorner(box, 0, [5, 5]).points).toEqual([[5, 5], [50, 60]])
+  expect(moveCorner(box, 1, [70, 15]).points).toEqual([[10, 15], [70, 60]])
+  expect(moveCorner(box, 2, [40, 30]).points).toEqual([[10, 20], [40, 30]])
+  expect(moveCorner(box, 3, [0, 80]).points).toEqual([[0, 20], [50, 80]])
+  // Past the corner across, it turns inside out and is still the same box
+  expect(bounds(moveCorner(box, 1, [0, 70]))).toEqual([0, 60, 10, 70])
 })
 
 test('Shift keeps rectangles square, and lines drawn off the image stop at its edge', () => {

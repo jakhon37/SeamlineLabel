@@ -62,7 +62,7 @@ jobs:
       - name: Allow Chromium's sandbox
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Write label files with the app
-        run: xvfb-run -a npx playwright test e2e/labelme.spec.ts e2e/ai.spec.ts --reporter=line
+        run: xvfb-run -a npx playwright test e2e/labelme.spec.ts e2e/ai.spec.ts e2e/labelimg.spec.ts --reporter=line
         env:
           E2E_DIR: ${{ runner.temp }}/e2e
       # labelme 7 loads Qt's GUI module, which needs GL libraries the runner image leaves out
@@ -73,6 +73,38 @@ jobs:
       - name: Load them with labelme 7 and labelme 5
         shell: bash
         run: |
-          files=$(ls ${{ runner.temp }}/e2e/{shapes/s,dialog/q,prelabel/p1,edit/a,output-labels/o}.json)
+          files=$(ls ${{ runner.temp }}/e2e/{shapes/s,dialog/q,prelabel/p1,edit/a,output-labels/o,labelimg-tools/a,verify/q}.json)
           uv run --no-project --python 3.12 --with labelme python tests/parity/labelme_reads.py $files
           uv run --no-project --python 3.12 --with 'labelme==5.8.1' python tests/parity/labelme_reads.py $files
+
+  labelimg-reads:
+    # Pascal VOC, YOLO and CreateML files this app writes must load in LabelImg itself, and be
+    # byte for byte what LabelImg writes for the same boxes
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: astral-sh/setup-uv@v10.3.3
+      - run: npm ci
+      - run: npx electron-vite build
+      - name: Allow Chromium's sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Write label files with the app
+        run: xvfb-run -a npx playwright test e2e/labelimg.spec.ts --reporter=line
+        env:
+          E2E_DIR: ${{ runner.temp }}/e2e
+      # LabelImg's label file code loads Qt's GUI module too
+      - name: Libraries for Qt
+        run: |
+          sudo apt-get update -q > /dev/null
+          sudo apt-get install -y -q libegl1 libgl1 libxkbcommon0 libfontconfig1 > /dev/null
+      - name: Read and write them with LabelImg 1.8.6 and its master branch
+        shell: bash
+        run: |
+          dir=${{ runner.temp }}/e2e
+          uv run --no-project --python 3.12 --with 'labelImg==1.8.6' python tests/parity/labelimg_reads.py $dir/labelimg $dir/labelimg-expected.json
+          uv run --no-project --python 3.12 --with 'labelImg @ git+https://github.com/HumanSignal/labelImg@b33f965' python tests/parity/labelimg_reads.py $dir/labelimg $dir/labelimg-expected.json

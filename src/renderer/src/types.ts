@@ -1,12 +1,13 @@
 import type { Config } from '../../shared/config'
+import type { LabelFormat } from '../../shared/formats'
 import type { LabelDoc, Shape } from '../../shared/labelfile'
 import type { Summary } from '../../shared/labels'
 
-export type { Config, LabelDoc, Shape }
+export type { Config, LabelDoc, LabelFormat, Shape }
 
 export type LabelClass = { name: string; color: string }
 export type ProjectInfo = { name: string; classes: LabelClass[] }
-export type ImageItem = Summary & { name: string; broken?: string; embedded?: boolean }
+export type ImageItem = Summary & { name: string; broken?: string; embedded?: boolean; verified?: boolean }
 export type OpenProject = {
   root: string
   outputDir: string | null
@@ -36,7 +37,12 @@ export type SaveRequest = {
   size: [number, number]
   storeData: boolean
   target?: string
+  format?: LabelFormat
+  verified?: boolean
+  classes?: string[]
+  from?: LabelFormat
 }
+export type Loaded = { file: string; format: LabelFormat | null; verified: boolean; doc: LabelDoc | null }
 export type ModelInfo = { name: string; title: string; size: number; downloaded: boolean }
 export type SegmentResult =
   | { kind: 'polygon'; points: number[][] }
@@ -50,16 +56,20 @@ declare global {
       start(): Promise<Start>
       pickFolder(title?: string): Promise<string | null>
       pickFile(title: string, filters: { name: string; extensions: string[] }[]): Promise<string | null>
-      pickSave(title: string, defaultPath: string): Promise<string | null>
+      pickSave(title: string, defaultPath: string, format?: LabelFormat): Promise<string | null>
       ask(message: string, detail: string, buttons: string[]): Promise<number>
       openProject(target: string, output: string | null): Promise<OpenProject>
       closeProject(root: string): Promise<void>
       saveProject(root: string, project: ProjectInfo): Promise<void>
       openImage(root: string, name: string): Promise<OpenImage>
-      loadLabels(root: string, name: string): Promise<{ file: string; doc: LabelDoc | null }>
-      saveLabels(root: string, name: string, req: SaveRequest): Promise<{ file: string; item: ImageItem }>
-      labelPath(root: string, name: string): Promise<string>
-      trashLabels(root: string, name: string): Promise<string>
+      loadLabels(root: string, name: string, prefer?: LabelFormat, size?: [number, number]): Promise<Loaded>
+      saveLabels(root: string, name: string, req: SaveRequest): Promise<{ file: string; item: ImageItem; format: LabelFormat; replaced?: string; kept?: string }>
+      labelPath(root: string, name: string, prefer: LabelFormat): Promise<string>
+      trashLabels(root: string, name: string, prefer: LabelFormat): Promise<string | null>
+      readLabelFile(root: string, name: string, file: string, size?: [number, number]): Promise<Loaded & { doc: LabelDoc; format: LabelFormat }>
+      trashImage(root: string, name: string): Promise<{ image: string; kept?: string }>
+      hasLabelsIn(root: string, name: string, format: LabelFormat): Promise<boolean>
+      resetSettings(): Promise<void>
       reveal(root: string, name: string): Promise<void>
       openConfig(): Promise<void>
       openLink(url: string): Promise<void>
