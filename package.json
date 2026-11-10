@@ -1,6 +1,6 @@
 {
   "name": "seamtag",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Label images in LabelMe format: polygons, boxes, brush and eraser, AI segmentation, and review of model proposals",
   "license": "GPL-3.0-only",
   "main": "out/main/index.js",
