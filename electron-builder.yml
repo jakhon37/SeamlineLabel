@@ -48,8 +48,8 @@ mac:
 linux:
   icon: resources/icons
   category: Graphics
-  synopsis: Image labelling in LabelMe format
-  description: Label images with polygons, boxes, brush and eraser, AI segmentation and review of model proposals. Saves LabelMe JSON.
+  synopsis: Image labelling in LabelMe, Pascal VOC, YOLO or CreateML format
+  description: Label images with polygons, boxes, brush and eraser, AI segmentation and review of model proposals. Saves LabelMe JSON, Pascal VOC, YOLO and CreateML files.
   target:
     - target: AppImage
       arch: [x64]

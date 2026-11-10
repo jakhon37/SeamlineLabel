@@ -304,7 +304,7 @@ export default function App() {
           <div className="dialog about" role="dialog" aria-label="About">
             <Logo size={56} />
             <h1>Seamtag {start.version}</h1>
-            <p>Image annotation in LabelMe format, with brush, eraser, AI segmentation and review of model proposals.</p>
+            <p>Image annotation in LabelMe, Pascal VOC, YOLO or CreateML format, with brush, eraser, AI segmentation and review of model proposals.</p>
             <p className="muted">Continues LabelMeV2, an enhanced fork of labelme by Kentaro Wada, on Seamline's desktop app. GPL-3.0. Pascal VOC, YOLO and CreateML files are read and written as LabelImg by Tzutalin does it, from its MIT-licensed code. AI models are downloaded from the addresses osam and labelme use, under their own licences.</p>
             <div className="actions"><button className="primary" onClick={() => setAbout(false)}>Close</button></div>
           </div>
