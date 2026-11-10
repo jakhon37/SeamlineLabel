@@ -157,7 +157,7 @@ test('the download question waits for the mouse button to come up', async () => 
   })
   const asked = () => app.evaluate(() => (globalThis as any).asked as string[])
   await open(page, 'd.png')
-  await page.getByRole('toolbar').getByRole('button', { name: 'AI polygon', exact: true }).click()
+  await page.getByRole('toolbar').getByRole('button', { name: 'AI points', exact: true }).click()
   await page.mouse.move(...(await onImage(page, 200, 150)))
   await page.mouse.down()
   await page.waitForTimeout(500)

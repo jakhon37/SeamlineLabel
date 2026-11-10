@@ -190,9 +190,10 @@ test("Merge Shapes joins masks of one label, every pixel kept, as labelme 7 does
   await click(page, 110, 80)
   await page.keyboard.up('ControlOrMeta')
   await page.keyboard.press('ControlOrMeta+Shift+m')
+  // The masks are merged in the main process: "Saved" shows until the result comes back
+  await expect.poll(() => shapesIn(dir, 'm').length).toBe(1)
   await saved(page)
   const shapes = shapesIn(dir, 'm')
-  expect(shapes).toHaveLength(1)
   expect(shapes[0].points).toEqual([[40, 40], [119, 99]])
   const { data, info } = await sharp(Buffer.from(shapes[0].mask, 'base64')).extractChannel(0).raw().toBuffer({ resolveWithObject: true })
   expect([info.width, info.height]).toEqual([80, 60])
