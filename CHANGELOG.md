@@ -7,8 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+labelme 7's tools, AI and settings.
+
+### Added
+- labelme 7's AI tools: AI points (clicks) and AI box (a box), each making a polygon, mask, rectangle, circle or rotated box of what the model finds. Polygons follow every part of the mask, grouped by one group ID, as `mask_polygonization.detail` sets; repeats of one object are dropped, and with `ai.suppress_existing_shape_matches` so are objects already drawn, whose shapes are selected instead.
+- labelme 7's AI text prompt: words such as `dog,cat` find and box everything they name with YOLO-World, each box labelled with its word, with its score in the description, and with score and overlap thresholds to set. Boxes over shapes of that label already drawn aren't made again. labelme also offers SAM 3 there; it isn't here, as its image encoder needs larger blocks of memory than Electron's allocator gives.
+- AI → AI models: every model with what it takes, its size and licence; download, cancel or delete it. The files stay in osam's cache, which labelme shares.
+- Rotated boxes (labelme 7's oriented rectangles) are drawn with three clicks, reshaped from a corner with the opposite one fixed, and turned by handles on their sides; an arrow shows the first side.
+- labelme 7's Lock Shapes (`Ctrl+Shift+L`), Fit to Selection (`Ctrl+Shift+F`), selecting the next shape that way with `Ctrl`+arrow, Add point to edge on the right-click menu, and merging masks of one label.
+- `Space` finishes a polygon, line strip or AI points shape being drawn, as in labelme 5.9.
+- labelme 7's command line (`--with-image-data`, `--no-auto-save`, `--no-sort-labels`, `--label-flags`, `--validate-label`) beside labelme 5's.
+- labelme 7's config keys: `with_image_data`, `shape_color` with its `auto`, `uniform` and `by_label` modes, `shape.show_labels`, `mask_polygonization.detail`, `ai.text_model`, `ai.suppress_existing_shape_matches`, `canvas.allow_out_of_bounds_points` and the new crosshair and shortcut names. Files written for labelme 5 are migrated as labelme 7 migrates them.
+- A footer under the image list: how many images are annotated, and whether their label files are next to them or in an output folder, with Change… and Next to images.
+
+### Changed
+- AI polygon and AI mask are AI points with a polygon or mask chosen; their shortcut keys carry over.
+- Hiding and showing shapes is undone like any change, and applies to every selected shape.
+- The shape list shows each shape's flags after its label, and labels drawn on shapes show their group ID, as in labelme 7.
+- `Ctrl+Shift+L` locks shapes and `Ctrl+Shift+F` fits the selection, as in labelme 7; LabelImg's label panel and Fit Width have no key, and docs/config.md has the lines that give them back theirs. Keep Previous Annotation has no key, as in labelme 7.6.
+
 ### Fixed
 - The question to download a model, asked on the first click of an AI tool, no longer locks the mouse on Linux (X11), where no window could be clicked until the question was closed from the keyboard. Questions and file dialogs now open once the mouse button is up.
+- SAM, in all three sizes, is no longer offered for AI points and AI box: inside Electron its image encoder asks for a block of memory (about 800 MB) larger than Electron's allocator gives, and choosing it closed the app. A config or an earlier choice that names it gets SAM2 (balanced).
+- The image an AI model sees is resized exactly as Pillow 13 resizes it, which runs the vertical pass first only when the height shrinks more than twice as much as the width. Some sizes came out one level apart, which changed YOLO-World's scores.
 
 ## [3.1.0] - 2026-11-10
 
