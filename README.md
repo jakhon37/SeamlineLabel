@@ -128,7 +128,7 @@ The point is that files go both ways, so it's tested from both sides:
 - In CI, labelme 7.9.1 and 5.8.1 load the files this app writes with each drawing tool and turn every shape into pixels with `shapes_to_label`, as labelme's export scripts do. CI has no SAM models; run locally with one, AI mask shapes pass the same check.
 - On the test photo, AI masks are the same as osam's, pixel for pixel, for EfficientSAM and SAM2. That needed Pillow's bilinear resize ported exactly, which a test checks against Pillow.
 - Pascal VOC, YOLO and CreateML files are written as LabelImg writes them, byte for byte: down to Python's rounding of halves, its number format, and LabelImg's rule that saved boxes are whole pixels starting from 1. Unit tests compare them with files LabelImg 1.8.6 and its master branch wrote, and read those files back as LabelImg reads them.
-- In CI, LabelImg 1.8.6 and its master branch read every Pascal VOC, YOLO and CreateML file the app writes, and write the same bytes for the same boxes.
+- In CI, LabelImg 1.8.6 and its master branch read every Pascal VOC, YOLO and CreateML file the app writes, and write the same bytes for the same boxes. The one difference is CreateML's verified mark, which master writes and 1.8.6 leaves out.
 
 labelme's export scripts in [examples/](examples) (to VOC or COCO) work on these files with `pip install labelme`.
 
