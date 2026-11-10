@@ -4,7 +4,7 @@ title: "Seamtag: image annotation in LabelMe, Pascal VOC, YOLO and CreateML form
 authors:
 - family-names: "Nodirov"
   given-names: "Jakhongir"
-version: 3.1.0
+version: 3.2.0
 url: "https://github.com/jakhon37/Seamtag"
 license: GPL-3.0-only
 references:

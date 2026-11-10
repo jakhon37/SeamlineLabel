@@ -5,9 +5,9 @@ All notable changes to Seamtag, and before it LabelMeV2, are documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.2.0] - 2026-11-10
 
-labelme 7's tools, AI and settings.
+labelme 7's tools, AI and settings, and two fixes: the mouse no longer locks on Linux (X11) when an AI tool asks to download its model, and SAM, which closed the app when chosen, is gone.
 
 ### Added
 - labelme 7's AI tools: AI points (clicks) and AI box (a box), each making a polygon, mask, rectangle, circle or rotated box of what the model finds. Polygons follow every part of the mask, grouped by one group ID, as `mask_polygonization.detail` sets; repeats of one object are dropped, and with `ai.suppress_existing_shape_matches` so are objects already drawn, whose shapes are selected instead.
