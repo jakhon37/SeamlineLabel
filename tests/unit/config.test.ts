@@ -61,53 +61,94 @@ describe('shortcuts, written as Qt writes them', () => {
 })
 
 describe('config', () => {
-  test("labelme's own config keys all exist here", () => {
-    // From labelme/config/default_config.yaml in LabelMeV2
-    const labelme = ['auto_save', 'display_label_popup', 'store_data', 'keep_prev', 'keep_prev_scale', 'keep_prev_brightness_contrast',
-      'logger_level', 'flags', 'label_flags', 'labels', 'file_search', 'sort_labels', 'validate_label', 'default_shape_color',
-      'shape_color', 'shift_auto_shape_color', 'label_colors', 'shape', 'ai', 'flag_dock', 'label_dock', 'shape_dock', 'file_dock',
-      'show_label_text_field', 'label_completion', 'fit_to_content', 'epsilon', 'canvas', 'shortcuts', 'dark_mode',
-      'default_num_points_to_add', 'zoom_increment', 'max_zoom', 'performance']
-    const config = defaultConfig()
-    for (const k of labelme) expect(config, k).toHaveProperty(k)
-    const shortcuts = ['close', 'open', 'open_dir', 'quit', 'save', 'save_as', 'save_to', 'delete_file', 'open_next', 'open_prev',
-      'zoom_in', 'zoom_out', 'zoom_to_original', 'fit_window', 'fit_width', 'create_polygon', 'create_rectangle', 'create_circle',
-      'create_line', 'create_point', 'create_linestrip', 'edit_polygon', 'delete_polygon', 'duplicate_polygon', 'copy_polygon',
-      'paste_polygon', 'undo', 'undo_last_point', 'edit_label', 'toggle_keep_prev_mode', 'remove_selected_point',
-      'add_multiple_points', 'merge_polygons', 'show_all_polygons', 'hide_all_polygons', 'toggle_all_polygons']
-    for (const k of shortcuts) expect(config.shortcuts, k).toHaveProperty(k)
+  const fixture = (name: string) => path.join(__dirname, '../fixtures', name, 'default_config.yaml')
+
+  test("labelme 7.9.1's whole default config loads, every key known", () => {
+    const { config, warnings } = loadConfig(parseArgs(['--config', fixture('labelme7')]))
+    expect(warnings).toEqual([])
+    // labelme's own defaults where Seamtag's differ
+    expect(config.display_label_popup).toBe(true)
+    expect(config.canvas.fill_drawing).toBe(true)
+    expect(config.shortcuts.create_polygon).toBe('Ctrl+N')
+    expect(config.shortcuts.lock_shape).toBe('Ctrl+Shift+L')
+    expect(config.shortcuts.fit_selection).toBe('Ctrl+Shift+F')
+    expect(config.shape_color.mode).toBe('auto')
+  })
+
+  test("labelme 5.8.1's whole default config, as labelme 5 copied it to ~/.labelmerc, migrates as labelme 7 migrates it", () => {
+    const { config, warnings } = loadConfig(parseArgs(['--config', fixture('labelme5')]))
+    expect(warnings).toEqual([])
+    expect(config.with_image_data).toBe(true)
+    expect(config.shape_color).toEqual({ mode: 'auto', auto: { shift: 0 }, uniform: { color: [0, 255, 0] }, by_label: { colors: null, fallback: [0, 255, 0] } })
+    expect(config.shortcuts.edit_shape).toBe('Ctrl+J')
+    expect(config.shortcuts.toggle_all_shapes).toBe('T')
+    expect(config.canvas.crosshair.ai_points_to_shape).toBe(false)
+    // labelme 5's Ctrl+Shift+F for Fit Width is Fit to Selection's now
+    expect(config.shortcuts.fit_width).toBeNull()
+    expect(config.shortcuts.fit_selection).toBe('Ctrl+Shift+F')
   })
 
   test("merging validates as labelme does, and reports keys it doesn't know", () => {
     const config = defaultConfig()
-    const unknown = mergeConfig(config, { auto_save: false, canvas: { num_backups: 5 }, new_key: 1 })
+    const unknown = mergeConfig(config, { auto_save: false, canvas: { num_backups: 5 }, shortcuts: null, new_key: 1, ai: { other: 1 } })
     expect(config.auto_save).toBe(false)
     expect(config.canvas.num_backups).toBe(5)
     expect(config.canvas.double_click).toBe('close')
-    expect(unknown).toEqual(['new_key'])
+    expect(config.shortcuts.save).toBe('Ctrl+S')
+    expect(unknown).toEqual(['new_key', 'ai.other'])
     expect(() => mergeConfig(defaultConfig(), { validate_label: 'fuzzy' })).toThrow(/validate_label/)
     expect(() => mergeConfig(defaultConfig(), { labels: ['a', 'a'] })).toThrow(/Duplicates/)
+    expect(() => mergeConfig(defaultConfig(), { labels: 'a' })).toThrow(/must be a list/)
+    expect(() => mergeConfig(defaultConfig(), { shortcuts: 'oops' })).toThrow(/must be a mapping/)
+    expect(() => mergeConfig(defaultConfig(), { mask_polygonization: { detail: 101 } })).toThrow(/between 0 and 100/)
+    expect(() => mergeConfig(defaultConfig(), { ai: { text_model: 'sam2:latest' } })).toThrow(/AI Text Prompt model/)
+    expect(() => mergeConfig(defaultConfig(), { label_flags: { '.*': 'occluded' } })).toThrow(/label_flags/)
   })
 
   test("old labelme config files are migrated as labelme migrates them", () => {
-    const raw: any = { keep_prev_brightness: true, shortcuts: { add_point_to_edge: 'Ctrl+Shift+P' }, ai: { default: 'SegmentAnything (speed)' } }
+    const raw: any = {
+      keep_prev_brightness: true, store_data: false, logger_level: 'debug', instance_label_auto_increment: true,
+      shortcuts: { add_point_to_edge: 'Ctrl+Shift+P', edit_polygon: 'Ctrl+J', delete_polygon: 'X', delete_shape: 'Delete', create_ai_mask: 'M' },
+      ai: { default: 'SegmentAnything (speed)' }, canvas: { crosshair: { ai_polygon: false, ai_mask: true } }
+    }
     migrateConfig(raw)
-    expect(raw).toEqual({ keep_prev_brightness_contrast: true, shortcuts: {}, ai: { default: 'Sam (speed)' } })
+    expect(raw).toEqual({
+      keep_prev_brightness_contrast: true, with_image_data: false,
+      shortcuts: { edit_shape: 'Ctrl+J', delete_shape: 'Delete', create_ai_points_to_shape: 'M' },
+      ai: { default: 'Sam (speed)' }, canvas: { crosshair: { ai_points_to_shape: true } }
+    })
   })
 
-  test("labelme's command line", () => {
+  test("labelme 5's colour keys become labelme 7's shape_color, and the two can't be mixed", () => {
+    const manual: any = { shape_color: 'manual', label_colors: { cat: [1, 2, 3] }, default_shape_color: [9, 9, 9] }
+    migrateConfig(manual)
+    expect(manual.shape_color).toEqual({ mode: 'by_label', uniform: { color: [9, 9, 9] }, by_label: { fallback: [9, 9, 9], colors: { cat: [1, 2, 3] } } })
+    const none: any = { shape_color: null }
+    migrateConfig(none)
+    expect(none.shape_color).toEqual({ mode: 'uniform' })
+    expect(() => migrateConfig({ shape_color: { mode: 'auto' }, label_colors: {} })).toThrow(/cannot be combined/)
+    expect(() => migrateConfig({ shape_color: 'rainbow' })).toThrow(/shape_color/)
+    expect(() => loadConfig(parseArgs(['--config', '{shape_color: {mode: rainbow}}']))).toThrow(/shape_color.mode/)
+    expect(() => loadConfig(parseArgs(['--config', '{shape_color: {by_label: {colors: {cat: [1, 2]}}}}']))).toThrow(/cat must be/)
+    expect(loadConfig(parseArgs(['--config', '{shape_color: manual, label_colors: {cat: [1, 2, 3]}}'])).config.shape_color.mode).toBe('by_label')
+  })
+
+  test("labelme 7's command line, and labelme 5's spellings", () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'sl-args-'))
     const labels = path.join(dir, 'labels.txt')
     writeFileSync(labels, 'cat\n\ndog \n')
-    const args = parseArgs(['--no-sandbox', 'images', '--labels', labels, '--flags', 'night,blurry', '--nodata', '--autosave',
-      '--labelflags', '{.*: [occluded]}', '--validatelabel', 'exact', '--epsilon=4', '-O', 'out', '--keep-prev', '--nosortlabels'])
+    const args = parseArgs(['--no-sandbox', 'images', '--labels', labels, '--flags', 'night,blurry', '--with-image-data', '--no-auto-save',
+      '--label-flags', '{.*: [occluded]}', '--validate-label', 'exact', '--epsilon=4', '-O', 'out', '--keep-prev', '--no-sort-labels', '--logger-level', 'debug'])
     expect(args.filename).toBe('images')
     expect(args.output).toBe('out')
     expect(args.overrides).toEqual({
-      labels: ['cat', 'dog'], flags: ['night', 'blurry'], store_data: false, auto_save: true,
+      labels: ['cat', 'dog'], flags: ['night', 'blurry'], with_image_data: true, auto_save: false,
       label_flags: { '.*': ['occluded'] }, validate_label: 'exact', epsilon: 4, keep_prev: true, sort_labels: false
     })
+    const old = parseArgs(['--nodata', '--autosave', '--labelflags', '{.*: [occluded]}', '--validatelabel', 'exact', '--nosortlabels'])
+    expect(old.overrides).toEqual({ with_image_data: false, auto_save: true, label_flags: { '.*': ['occluded'] }, validate_label: 'exact', sort_labels: false })
     expect(() => parseArgs(['--validatelabel', 'fuzzy'])).toThrow()
+    expect(() => parseArgs(['--validate-label', 'fuzzy'])).toThrow()
   })
 
   test("LabelImg's command line: an image folder, a file of classes, then where labels go", () => {
@@ -135,7 +176,7 @@ describe('config', () => {
     expect(fromFile.config.auto_save).toBe(false)
     expect(fromFile.config.shortcuts.save).toBe('Ctrl+Alt+S')
     const inline = loadConfig(parseArgs(['--config', '{store_data: true}']))
-    expect(inline.config.store_data).toBe(true)
+    expect(inline.config.with_image_data).toBe(true)
     expect(inline.file).toBeNull()
     expect(() => loadConfig(parseArgs(['--config', path.join(dir, 'missing')]))).toThrow(/does not exist/)
     expect(() => loadConfig(parseArgs(['--config', '{validate_label: exact}']))).toThrow(/labels must be specified/)
@@ -147,13 +188,20 @@ describe('colours', () => {
     expect(LABEL_COLORMAP.slice(0, 4)).toEqual([[0, 0, 0], [128, 0, 0], [0, 128, 0], [128, 128, 0]])
     const config = defaultConfig()
     expect(autoColor(0, config)).toBe('#800000')
-    expect(autoColor(0, { ...config, shift_auto_shape_color: 2 })).toBe('#808000')
+    config.shape_color.auto.shift = 2
+    expect(autoColor(0, config)).toBe('#808000')
   })
 
-  test('manual colours first, then a Seamline project colour, then automatic', () => {
-    const config = { ...defaultConfig(), shape_color: 'manual' as const, label_colors: { cat: [1, 2, 3] } }
-    expect(labelColor('cat', 0, config, '#ffffff')).toBe('#010203')
+  test('colours by label first, then a Seamline project colour, then automatic, uniform or the fallback', () => {
+    const withMode = (mode: 'auto' | 'uniform' | 'by_label') => {
+      const config = defaultConfig()
+      config.shape_color = { ...config.shape_color, mode, uniform: { color: [1, 1, 1] }, by_label: { colors: { cat: [1, 2, 3] }, fallback: [4, 5, 6] } }
+      return config
+    }
+    expect(labelColor('cat', 0, withMode('by_label'), '#ffffff')).toBe('#010203')
+    expect(labelColor('dog', 0, withMode('by_label'), undefined)).toBe('#040506')
     expect(labelColor('dog', 0, defaultConfig(), '#4f8cff')).toBe('#4f8cff')
-    expect(labelColor('dog', 1, { ...defaultConfig(), shape_color: null }, undefined)).toBe('#00ff00')
+    expect(labelColor('dog', 1, withMode('uniform'), undefined)).toBe('#010101')
+    expect(labelColor('cat', 0, withMode('auto'), undefined)).toBe('#800000')
   })
 })

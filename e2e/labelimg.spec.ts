@@ -204,10 +204,15 @@ test("LabelImg's box tools: squares with Ctrl or Draw Squares, any corner, the s
   await showing(false)
   await page.keyboard.press('ControlOrMeta+a')
   await showing(true)
-  await page.keyboard.press('ControlOrMeta+Shift+l')
+  // LabelImg's Ctrl+Shift+L is labelme 7's Lock Shapes; its label panel is in the View menu
+  const panel = async () => {
+    await page.getByRole('menuitem', { name: 'View' }).click()
+    await page.getByRole('menuitemcheckbox', { name: 'Label panel' }).click()
+  }
+  await panel()
   await expect(page.getByRole('region', { name: 'Shapes' })).toHaveCount(0)
   await expect(page.getByRole('region', { name: 'Labels' })).toHaveCount(0)
-  await page.keyboard.press('ControlOrMeta+Shift+l')
+  await panel()
   await expect(page.getByRole('region', { name: 'Shapes' })).toBeVisible()
   await finish(app, errors)
 })

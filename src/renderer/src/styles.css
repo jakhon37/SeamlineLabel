@@ -143,6 +143,23 @@ canvas:focus { outline: none; }
 .dialog.about { width: 420px; align-items: center; text-align: center; }
 .dialog.about p { margin: 0; }
 .dialog.shortcuts { width: 560px; max-height: 76vh; overflow: auto; }
+.dialog.models { width: 680px; max-height: 76vh; overflow: auto; }
+.dialog.models h3 { margin: 0; }
+.dialog.models p { margin: 0; }
+.dialog.models table { width: 100%; border-collapse: collapse; }
+.dialog.models th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 8px; }
+.dialog.models td { padding: 6px 8px; border-top: 1px solid var(--line); white-space: nowrap; }
+.dialog.models td.act { text-align: right; display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+.dialog.models a { color: var(--accent); }
+.toolbar.prompt { gap: 8px; flex-wrap: nowrap; }
+.turned { transform: rotate(-24deg); }
+.annotation-folder { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 8px 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.annotation-folder span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.annotation-folder .link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; }
+.toolbar.prompt input[type='text'] { flex: 1 1 auto; width: auto; min-width: 120px; padding: 3px 8px; }
+.toolbar.prompt select { flex: 0 0 auto; width: auto; max-width: 170px; padding: 3px 6px; }
+.toolbar.prompt .slider { margin-left: 0; }
+.toolbar.prompt .slider input[type='number'] { width: 56px; padding: 2px 4px; }
 .dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .dialog label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
 .dialog label.check { flex-direction: row; color: var(--text); }

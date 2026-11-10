@@ -1,5 +1,6 @@
 import { contours } from 'd3-contour'
 import sharp from 'sharp'
+import { roundHalfEven } from './detections'
 
 // Masks to the shapes labelme makes of them: a polygon around the largest part, or a
 // labelme mask shape (a box and the pixels inside it as a PNG of 0s and 1s).
@@ -75,6 +76,21 @@ export function polygonFromMask(mask: Mask, scale = 1): number[][] {
   return ring.map(([x, y]) => [Math.round((x / scale) * 100) / 100, Math.round((y / scale) * 100) / 100])
 }
 
+/** A mask's pixels as labelme stores them in a mask shape: a greyscale PNG of 0s and 1s, base64 */
+export async function encodeMask(data: Uint8Array, width: number, height: number) {
+  // Greyscale, as labelme writes it: sharp would otherwise widen one channel to RGB
+  const png = await sharp(Buffer.from(data), { raw: { width, height, channels: 1 } }).toColourspace('b-w').png().toBuffer()
+  return png.toString('base64')
+}
+
+/** A mask shape's PNG back to pixels: 1 wherever the PNG isn't 0 */
+export async function decodeMask(base64: string): Promise<Mask> {
+  const { data, info } = await sharp(Buffer.from(base64, 'base64')).extractChannel(0).raw().toBuffer({ resolveWithObject: true })
+  const out = new Uint8Array(info.width * info.height)
+  for (let i = 0; i < out.length; i++) out[i] = data[i * info.channels] ? 1 : 0
+  return { data: out, width: info.width, height: info.height }
+}
+
 /**
  * labelme's mask shape: the box of the mask, both corners inclusive as imgviz gives it, and
  * the pixels inside as a PNG of 0s and 1s, exactly what labelme's shapes_to_label puts back.
@@ -106,4 +122,26 @@ export async function maskShape(mask: Mask, fullWidth: number, fullHeight: numbe
   // Greyscale, as labelme writes it: sharp would otherwise widen one channel to RGB
   const png = await sharp(Buffer.from(crop), { raw: { width: w, height: h, channels: 1 } }).toColourspace('b-w').png().toBuffer()
   return { box: [[box[0], box[1]], [box[2], box[3]]], mask: png.toString('base64') }
+}
+
+/**
+ * labelme 7's merge_masks: mask shapes of one label become one, every pixel kept. The box
+ * covers all of them, and each mask's own pixels where they reach past its box.
+ */
+export async function mergeMasks(shapes: { points: number[][]; mask: string }[]) {
+  const placed = await Promise.all(shapes.map(async (s) => {
+    const [[x0, y0], [x1, y1]] = s.points.map((p) => p.map(roundHalfEven))
+    return { x0, y0, x1, y1, m: await decodeMask(s.mask) }
+  }))
+  const xmin = Math.min(...placed.map((p) => p.x0)), ymin = Math.min(...placed.map((p) => p.y0))
+  const xmax = Math.max(...placed.map((p) => p.x1)), ymax = Math.max(...placed.map((p) => p.y1))
+  const height = Math.max(ymax - ymin + 1, ...placed.map((p) => p.y0 - ymin + p.m.height))
+  const width = Math.max(xmax - xmin + 1, ...placed.map((p) => p.x0 - xmin + p.m.width))
+  const data = new Uint8Array(width * height)
+  for (const { x0, y0, m } of placed) {
+    for (let y = 0; y < m.height; y++) {
+      for (let x = 0; x < m.width; x++) if (m.data[y * m.width + x]) data[(y0 - ymin + y) * width + (x0 - xmin + x)] = 1
+    }
+  }
+  return { points: [[xmin, ymin], [xmin + width - 1, ymin + height - 1]], mask: await encodeMask(data, width, height) }
 }

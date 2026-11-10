@@ -17,6 +17,10 @@ files:
   - node_modules/onnxruntime-node/bin/napi-v6/${platform}/${arch}/**
   - "!node_modules/onnxruntime-node/bin/napi-v6/linux/*/libonnxruntime_providers_cuda.so"
   - "!node_modules/onnxruntime-node/bin/napi-v6/linux/*/libonnxruntime_providers_tensorrt.so"
+# CLIP's vocabulary, for SAM 3's and YOLO-World's word prompts
+extraResources:
+  - from: resources/clip
+    to: clip
 asarUnpack:
   - node_modules/sharp/**
   - node_modules/@img/**

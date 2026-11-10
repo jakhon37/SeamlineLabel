@@ -2,7 +2,9 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, shell } from 
 import { existsSync, promises as fs, readFileSync, writeFileSync } from 'fs'
 import path from 'path'
 import { pathToFileURL } from 'url'
-import { download, listModels, release, segment } from './ai'
+import { cancelDownload, download, listModels, release, removeModel } from './ai'
+import { mergeMasks } from './masks'
+import { assist, type AssistRequest, fromTexts, MaskOutputUnavailable, type TextRequest } from './assist'
 import { type Args, loadConfig, type LoadedConfig, parseArgs, USAGE, USER_CONFIG } from './config'
 import { FORMAT_EXT, FORMAT_NAMES, type LabelFormat } from '../shared/formats'
 import { cacheRoot, imageData, imageDepth, imageSize, openImage, setCacheDir } from './images'
@@ -149,8 +151,15 @@ function registerIpc() {
   })
   ipcMain.handle('ai:models', () => listModels())
   ipcMain.handle('ai:download', (_e, name: string) => download(name, (p) => send('ai:download', p)))
-  ipcMain.handle('ai:segment', (_e, root: string, name: string, model: string, points: number[][], labels: number[], mode: 'polygon' | 'mask') =>
-    segment(root, name, model, points, labels, mode))
+  ipcMain.handle('ai:cancel', (_e, name: string) => cancelDownload(name))
+  ipcMain.handle('ai:remove', (_e, name: string) => removeModel(name))
+  ipcMain.handle('ai:assist', (_e, req: AssistRequest) => assist(req))
+  ipcMain.handle('shapes:merge-masks', (_e, shapes: { points: number[][]; mask: string }[]) => mergeMasks(shapes))
+  // A model that finds boxes only, asked for masks, is the user's choice to change, not a failure
+  ipcMain.handle('ai:text', (_e, req: TextRequest) => fromTexts(req).catch((e) => {
+    if (e instanceof MaskOutputUnavailable) return { shapes: [], matched: [], notice: e.message }
+    throw e
+  }))
   ipcMain.handle('prelabel:pick', async () => {
     const r = await dialog.showOpenDialog(win!, { title: 'Choose a segmentation model', properties: ['openFile'], filters: [{ name: 'ONNX models', extensions: ['onnx'] }] })
     return r.canceled ? null : modelInfo(r.filePaths[0])

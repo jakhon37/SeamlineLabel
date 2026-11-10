@@ -15,7 +15,7 @@ const HEADER = `# Seamtag config file.
 #
 # Example:
 # auto_save: true
-# store_data: false
+# with_image_data: false
 # labels: [cat, dog]
 `
 
@@ -47,16 +47,19 @@ export const USAGE = `Usage: seamtag [options] [image, label file or folder] [cl
   --reset-config        forget window layout, recent files and settings made in the app
   --output, -O, -o DIR  folder for label files (a path ending in .json saves one file there)
   --config FILE|YAML    config file, or YAML overrides (default: ~/.seamtagrc)
-  --nodata              don't store image data in label files
-  --autosave            save automatically
-  --nosortlabels        keep labels in the order given
+  --with-image-data     store image data in label files
+  --no-auto-save        don't save automatically
+  --no-sort-labels      keep labels in the order given
   --flags LIST|FILE     comma separated image flags, or a file with one per line
-  --labelflags YAML|FILE  flags for labels matching a pattern, e.g. "{.*: [occluded]}"
+  --label-flags YAML|FILE  flags for labels matching a pattern, e.g. "{.*: [occluded]}"
   --labels LIST|FILE    comma separated labels, or a file with one per line
-  --validatelabel exact only allow labels from --labels
+  --validate-label exact  only allow labels from --labels
   --keep-prev           copy the previous image's shapes to an image with none
   --epsilon PIXELS      how close counts as on a vertex
   --logger-level LEVEL  debug, info, warning, error or fatal
+
+  labelme 5's spellings work too: --nodata, --autosave, --nosortlabels, --labelflags
+  and --validatelabel.
 `
 
 function listOrFile(value: string): string[] {
@@ -84,19 +87,21 @@ export function parseArgs(argv: string[]): Args {
       case '--reset-config': args.resetConfig = true; break
       case '--output': case '-O': case '-o': args.output = value(); break
       case '--config': args.config = value(); break
-      case '--nodata': args.overrides.store_data = false; break
+      case '--with-image-data': args.overrides.with_image_data = true; break
+      case '--nodata': args.overrides.with_image_data = false; break
+      case '--no-auto-save': args.overrides.auto_save = false; break
       case '--autosave': args.overrides.auto_save = true; break
-      case '--nosortlabels': args.overrides.sort_labels = false; break
+      case '--no-sort-labels': case '--nosortlabels': args.overrides.sort_labels = false; break
       case '--flags': args.overrides.flags = listOrFile(value()); break
       case '--labels': args.overrides.labels = listOrFile(value()); break
-      case '--labelflags': {
+      case '--label-flags': case '--labelflags': {
         const v = value()
         args.overrides.label_flags = yaml.load(existsSync(v) ? readFileSync(v, 'utf8') : v)
         break
       }
-      case '--validatelabel': {
+      case '--validate-label': case '--validatelabel': {
         const v = value()
-        if (v !== 'exact') throw new Error(`--validatelabel must be exact, not ${v}`)
+        if (v !== 'exact') throw new Error(`${flag} must be exact, not ${v}`)
         args.overrides.validate_label = v
         break
       }
@@ -107,7 +112,8 @@ export function parseArgs(argv: string[]): Args {
         args.overrides.epsilon = v
         break
       }
-      case '--logger-level': args.overrides.logger_level = value().toLowerCase(); break
+      // labelme logs at this level; this app has no log, so it's read and set aside
+      case '--logger-level': value(); break
       default:
         if (raw.startsWith('-')) break
         // LabelImg's command line: an image folder, then a file of classes, then where labels go
@@ -158,7 +164,9 @@ export function loadConfig(args: Args): LoadedConfig {
       if (unknown.length) warnings.push(`${path.basename(file)} has keys this version doesn't use: ${unknown.join(', ')}`)
     }
   }
-  const unknown = mergeConfig(config, { ...overrides, ...args.overrides })
+  const inline = { ...overrides, ...args.overrides }
+  migrateConfig(inline)
+  const unknown = mergeConfig(config, inline)
   if (unknown.length) warnings.push(`Unknown config keys were ignored: ${unknown.join(', ')}`)
   checkConfig(config)
   return { config, file, warnings }

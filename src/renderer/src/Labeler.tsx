@@ -1,9 +1,9 @@
 import {
   Check, CheckCheck, Circle, Eraser, Eye, EyeOff, Hexagon, Maximize, MousePointer2, Paintbrush, Plus, Redo2, SkipForward,
-  Slash, Sparkles, Spline, Square, Trash2, Undo2, Wand2, X, Dot, ScanLine, Lock, BadgeCheck
+  Slash, Sparkles, Spline, Square, Trash2, Undo2, Wand2, X, Dot, ScanLine, Lock, BadgeCheck, RectangleHorizontal, Type, Focus
 } from 'lucide-react'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
-import { type Config, matches, type ShortcutName, shortcutList } from '../../shared/config'
+import { AI_OUTPUTS, type AiOutput, type Config, matches, type ShortcutName, shortcutList } from '../../shared/config'
 import {
   asBox, boxOf, FORMAT_NAMES, holdsBoxesOnly, keepsDifficult, keepsVerified, LABEL_FORMATS, type LabelFormat, NEXT_FORMAT
 } from '../../shared/formats'
@@ -13,18 +13,24 @@ import { labelColor, withAlpha } from './colors'
 import { eraseShapes, paintShapes, strokeRegion } from './geometry'
 import LabelDialog, { flagsFor, type LabelChoice, type LabelRequest } from './LabelDialog'
 import { ContextMenu } from './Menu'
+import Models from './Models'
 import {
-  addPointsToEdge, bounds, canRemovePoint, CLOSED, contains, describe, edges, insertPoint, mergePolygons, moveCorner, moveShapes,
-  nearestEdge, nearestVertex, outline, type Pt, squareFrom, toEdge, vertices
+  addPointsToEdge, bounds, boxCenter, canRemovePoint, CLOSED, contains, describe, EDITABLE_POINTS, edges, insertPoint, mergePolygons,
+  moveCorner, moveShapes, nearestEdge, nearestVertex, outline, type Pt, reprojectCorners, rotatePoints, rotationHandles, squareFrom, toEdge, vertices
 } from './shapes'
 import {
-  fileUrl, type ImageItem, type Loaded, type ModelInfo, type OpenImage, type OpenProject, plainError, type PrelabelModel, type ProjectInfo
+  type DrawnShape, fileUrl, type ImageItem, type Loaded, type ModelInfo, type OpenImage, type OpenProject, plainError, type PrelabelModel, type ProjectInfo,
+  type ProposedShape
 } from './types'
 
-export type Mode = 'edit' | 'polygon' | 'rectangle' | 'circle' | 'line' | 'point' | 'linestrip' | 'ai_polygon' | 'ai_mask' | 'brush' | 'eraser'
-export const CREATE_MODES: Mode[] = ['polygon', 'rectangle', 'circle', 'line', 'point', 'linestrip', 'ai_polygon', 'ai_mask']
+export type Mode = 'edit' | 'polygon' | 'rectangle' | 'oriented_rectangle' | 'circle' | 'line' | 'point' | 'linestrip' | 'ai_points' | 'ai_box' | 'brush' | 'eraser'
+export const CREATE_MODES: Mode[] = ['polygon', 'rectangle', 'oriented_rectangle', 'circle', 'line', 'point', 'linestrip', 'ai_points', 'ai_box']
 // LabelImg's formats keep boxes only: AI shapes become the box around them
-const BOX_MODES = new Set<Mode>(['edit', 'rectangle', 'ai_polygon', 'ai_mask'])
+const BOX_MODES = new Set<Mode>(['edit', 'rectangle', 'ai_points', 'ai_box'])
+const AI_MODES = new Set<Mode>(['ai_points', 'ai_box'])
+// labelme 7's names for the AI tools, in its crosshair settings
+const CROSSHAIR: Partial<Record<Mode, string>> = { ai_points: 'ai_points_to_shape', ai_box: 'ai_box_to_shape' }
+export const AI_OUTPUT_NAMES: Record<AiOutput, string> = { polygon: 'Polygon', mask: 'Mask', rectangle: 'Rectangle', circle: 'Circle', oriented_rectangle: 'Rotated box' }
 
 export type Settings = {
   autoSave: boolean
@@ -34,8 +40,12 @@ export type Settings = {
   keepPrevBC: boolean
   fillDrawing: boolean
   fill: number
-  fit: 'window' | 'width' | 'manual'
+  fit: 'window' | 'width' | 'selection' | 'manual'
   aiModel: string
+  /** What AI points and AI box make of what the model finds */
+  aiOutput: AiOutput
+  /** The model for the AI text prompt */
+  aiTextModel: string
   prelabelModel: string
   docks: { files: boolean; labels: boolean; shapes: boolean; flags: boolean }
   dark: boolean
@@ -70,6 +80,9 @@ type Props = {
   onError: (m: string) => void
   onOpenMenu: (x: number, y: number) => void
   onChange: () => void
+  /** Where label files go: another folder, or back next to the images */
+  onChangeOutput: () => void
+  onNextToImages: () => void
 }
 type Drag =
   | { kind: 'pan'; x: number; y: number; press: number[]; button: number; moved: boolean }
@@ -78,8 +91,10 @@ type Drag =
   | { kind: 'two'; press: number[] }
   | { kind: 'stroke'; points: number[][]; radius: number }
   | { kind: 'ghost'; shapes: number[]; x: number; y: number; press: number[]; active: boolean }
-type Draft = { points: Pt[]; labels: number[]; preview: Shape | null }
-type Hover = { shape: number; vertex: number; edge: number } | null
+  | { kind: 'rotate'; shape: number; center: Pt; angle: number; press: number[]; active: boolean; start: Shape[] }
+type Draft = { points: Pt[]; labels: number[]; preview: Shape[]; matched: Shape[] }
+// `rotate`: one of a rotated box's handles, at the middle of its edges
+type Hover = { shape: number; vertex: number; edge: number; rotate?: number } | null
 
 const HISTORY_IMAGES = 30
 const CACHE_TILES = 400
@@ -94,8 +109,8 @@ const FILTERS: { key: Filter; name: string; title: string; test: (i: ImageItem) 
 const percent = (score: number) => `${Math.round(score * 100)}%`
 const COLOR_TITLES = { line: 'Shape line colour', fill: 'Shape fill colour', draw: 'Box line colour' }
 const MODE_NAMES: Record<Mode, string> = {
-  edit: 'Edit', polygon: 'Polygon', rectangle: 'Rectangle', circle: 'Circle', line: 'Line', point: 'Point',
-  linestrip: 'Line strip', ai_polygon: 'AI polygon', ai_mask: 'AI mask', brush: 'Brush', eraser: 'Eraser'
+  edit: 'Edit', polygon: 'Polygon', rectangle: 'Rectangle', oriented_rectangle: 'Rotated box', circle: 'Circle', line: 'Line', point: 'Point',
+  linestrip: 'Line strip', ai_points: 'AI points', ai_box: 'AI box', brush: 'Brush', eraser: 'Eraser'
 }
 
 // Least certain first; shapes without a score come last
@@ -143,7 +158,7 @@ function maskCanvas(mask: string, color: string, onReady: () => void) {
 }
 
 const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
-  const { data, config, settings, setSettings, setProject, setImages, discovered, mac, onError, onOpenMenu, onChange } = props
+  const { data, config, settings, setSettings, setProject, setImages, discovered, mac, onError, onOpenMenu, onChange, onChangeOutput, onNextToImages } = props
   const { project, images, root } = data
   const [index, setIndex] = useState(() => Math.max(0, data.select ? images.findIndex((i) => i.name === data.select) : 0))
   const [query, setQuery] = useState(config.file_search ?? '')
@@ -176,7 +191,12 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   const [ghostMenu, setGhostMenu] = useState<{ x: number; y: number } | null>(null)
   const [bcOpen, setBcOpen] = useState(false)
   const [models, setModels] = useState<ModelInfo[] | null>(null)
-  const [download, setDownload] = useState<{ name: string; done: number; total: number } | null>(null)
+  const [modelsOpen, setModelsOpen] = useState(false)
+  // labelme's AI Text Prompt: words to find, and how sure and how separate the finds must be
+  const [aiPrompt, setAiPrompt] = useState('')
+  const [aiScore, setAiScore] = useState(0.1)
+  const [aiIou, setAiIou] = useState(0.5)
+  const [download, setDownload] = useState<{ name: string; model: string; done: number; total: number } | null>(null)
   const [prelabelModel, setPrelabelModel] = useState<PrelabelModel | null>(null)
   const [dragOver, setDragOver] = useState<number | null>(null)
   const [, setTick] = useState(0)
@@ -234,6 +254,10 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   formatRef.current = settings.format
   const ctrl = useRef(false)
   const ghost = useRef<{ shapes: number[]; dx: number; dy: number } | null>(null)
+  // Where the context menu was opened, for Add Point to Edge
+  const menuPoint = useRef<Pt | null>(null)
+  // A Fit to Selection put off until the mouse button is up
+  const pendingFit = useRef(false)
 
   // The label list: config labels, then a Seamline project's classes, then labels found in the files
   const classes = useMemo(() => {
@@ -247,6 +271,9 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   }, [config, project.classes, discovered, shapes])
   const opts = useRef({ showShapes, settings, classes, mode, activeClass, brushSize, bc })
   opts.current = { showShapes, settings, classes, mode, activeClass, brushSize, bc }
+  // labelme 7's allow_out_of_bounds_points: points may go past the image's edge
+  const free = config.canvas.allow_out_of_bounds_points
+  const imageSize = (): [number, number] | null => (free || !metaRef.current ? null : [metaRef.current.width, metaRef.current.height])
 
   const colorOf = useCallback((label: string) => {
     const list = opts.current.classes
@@ -420,6 +447,33 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
             ctx.stroke()
           })
         }
+        if (s.shape_type === 'oriented_rectangle' && s.points.length === 4) {
+          // labelme's arrow along the first side, so the box's direction shows
+          const [cx, cy] = S(boxCenter(s.points))
+          const a = Math.atan2(s.points[1][1] - s.points[0][1], s.points[1][0] - s.points[0][0])
+          const cos = Math.cos(a) * 8, sin = Math.sin(a) * 8
+          ctx.beginPath()
+          ;[[0.22, -0.5], [1, 0], [0.22, 0.5], [-1, 0]].forEach(([ax, ay], k) => {
+            const px = cx + ax * cos - ay * sin, py = cy + ax * sin + ay * cos
+            if (k) ctx.lineTo(px, py)
+            else ctx.moveTo(px, py)
+          })
+          ctx.closePath()
+          ctx.fillStyle = isSel ? '#ffffff' : color
+          ctx.fill()
+          if (isSel && !s.locked) {
+            rotationHandles(s.points).forEach((q, r) => {
+              const [hx, hy] = S(q)
+              ctx.beginPath()
+              ctx.rect(hx - 4, hy - 4, 8, 8)
+              ctx.fillStyle = hv?.shape === i && hv.rotate === r ? '#ffffff' : color
+              ctx.fill()
+              ctx.strokeStyle = '#ffffff'
+              ctx.lineWidth = 1.5
+              ctx.stroke()
+            })
+          }
+        }
         if (isHover && hv && hv.vertex < 0 && hv.edge >= 0 && (isSel || shift.current)) {
           const [a, b] = edges(s)[hv.edge] ?? []
           if (a !== undefined) {
@@ -455,9 +509,10 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
         ctx.textBaseline = 'middle'
         shapesRef.current.forEach((s) => {
           if (s.hidden || !s.label) return
+          const text = s.group_id !== null ? `${s.label} (${s.group_id})` : s.label
           const [x0, y0] = bounds(s)
           const [lx, top] = S([x0, y0])
-          const w = ctx.measureText(s.label).width + 8, h = 17
+          const w = ctx.measureText(text).width + 8, h = 17
           const ly = top - h < 0 ? top : top - h
           if (lx > W || ly > H || lx + w < 0 || ly + h < 0) return
           const color = colorOf(s.label)
@@ -467,7 +522,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
           ctx.fillRect(lx, ly, w, h)
           ctx.globalAlpha = 1
           ctx.fillStyle = ((v >> 16) & 255) * 0.299 + ((v >> 8) & 255) * 0.587 + (v & 255) * 0.114 > 150 ? '#000000' : '#ffffff'
-          ctx.fillText(s.label, lx + 4, ly + h / 2 + 0.5)
+          ctx.fillText(text, lx + 4, ly + h / 2 + 0.5)
         })
         ctx.textBaseline = 'alphabetic'
       }
@@ -510,19 +565,28 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       ctx.strokeStyle = pen
       ctx.fillStyle = withAlpha(pen, 0.25)
       ctx.lineWidth = 2
-      if (m2 === 'ai_polygon' || m2 === 'ai_mask') {
-        if (dr.preview) {
-          path(dr.preview)
-          if (dr.preview.shape_type === 'mask' && dr.preview.mask) {
-            const c = maskCanvas(dr.preview.mask, current, () => invalidate())
+      if (m2 === 'ai_points') {
+        for (const found of dr.matched) {
+          if (!shapesRef.current.includes(found)) continue
+          path(found)
+          ctx.strokeStyle = '#ffd166'
+          ctx.lineWidth = 3
+          ctx.stroke()
+          ctx.strokeStyle = pen
+          ctx.lineWidth = 2
+        }
+        for (const shape of dr.preview) {
+          path(shape)
+          if (shape.shape_type === 'mask' && shape.mask) {
+            const c = maskCanvas(shape.mask, current, () => invalidate())
             if (c) {
               ctx.globalAlpha = 0.45
-              const [x0, y0] = S(dr.preview.points[0])
+              const [x0, y0] = S(shape.points[0])
               ctx.imageSmoothingEnabled = false
               ctx.drawImage(c, x0, y0, c.width * scale, c.height * scale)
               ctx.globalAlpha = 1
             }
-          } else ctx.fill('evenodd')
+          } else if (CLOSED.has(shape.shape_type)) ctx.fill('evenodd')
           ctx.setLineDash([5, 4])
           ctx.stroke()
           ctx.setLineDash([])
@@ -558,7 +622,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     }
     // labelme's crosshair, per drawing mode
     const ch = config.canvas.crosshair as Record<string, boolean>
-    if (overCanvas.current && ch[o.mode] && !d) {
+    if (overCanvas.current && ch[CROSSHAIR[o.mode] ?? o.mode] && !d) {
       const [mx, my] = S(mouse.current)
       ctx.strokeStyle = 'rgba(255,255,255,0.45)'
       ctx.lineWidth = 1
@@ -585,6 +649,8 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     const m = metaRef.current
     const dr = draft.current
     if (!m || !dr) return null
+    // A rotated box's third corner is fitted on the image by reprojectCorners itself
+    if (free || (opts.current.mode === 'oriented_rectangle' && dr.points.length === 4)) return mouse.current
     const last = dr.points[dr.points.length - 1]
     return last ? toEdge(last, mouse.current, m.width, m.height) : mouse.current
   }
@@ -596,6 +662,12 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     // Drawn open until it's closed
     if (md === 'polygon' || md === 'linestrip') return newShape('', 'linestrip', [...dr.points, p])
     if (md === 'rectangle') return newShape('', 'rectangle', [first, squareNow() ? squareFrom(first, p) : p])
+    if (md === 'ai_box') return newShape('', 'rectangle', [first, p])
+    if (md === 'oriented_rectangle') {
+      // Two corners make one side; then the pointer sets how wide it is
+      if (dr.points.length === 1) return newShape('', 'line', [first, p])
+      return newShape('', 'oriented_rectangle', reprojectCorners(dr.points, 2, p, imageSize()))
+    }
     if (md === 'circle') return newShape('', 'circle', [first, p])
     if (md === 'line') return newShape('', 'line', [first, p])
     return null
@@ -876,7 +948,8 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     const canvas = canvasRef.current!
     const observer = new ResizeObserver(() => {
       const f = settingsRef.current.fit
-      if (f !== 'manual' && metaRef.current) fit(f)
+      if (f === 'selection') fitSelection()
+      else if (f !== 'manual' && metaRef.current) fit(f)
       else invalidate()
     })
     observer.observe(canvas)
@@ -912,9 +985,21 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     setImages((all) => all.map((i) => (i.name === name ? { ...i, ...summarize(found, true) } : i)))
   }), [invalidate, root, setImages])
   useEffect(() => window.api.onAiDownload((p) => setDownload(p.done >= p.total ? null : p)), [])
+  // Fit to Selection follows the selection, once the mouse button is up: a press that selects a
+  // shape may become a drag of it, measured in the view it started in
+  useEffect(() => {
+    if (settings.fit !== 'selection') return
+    if (drag.current) pendingFit.current = true
+    else fitSelection()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, settings.fit])
   useEffect(() => {
     window.api.aiModels().then(setModels).catch(() => setModels(null))
   }, [])
+  // A model kept from before, or named in a config, that this version doesn't offer: SAM2 instead
+  useEffect(() => {
+    if (models && !models.some((m) => m.name === settings.aiModel && (m.points || m.box))) setSettings((s) => ({ ...s, aiModel: 'sam2:latest' }))
+  }, [models, settings.aiModel, setSettings])
   useEffect(() => {
     if (!settings.prelabelModel) return setPrelabelModel(null)
     window.api.prelabelInfo(settings.prelabelModel).then(setPrelabelModel).catch(() => setPrelabelModel(null))
@@ -937,10 +1022,12 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     return { x: e.clientX - rect.left, y: e.clientY - rect.top }
   }
   const clampPoint = (p: Pt) => {
+    if (free) return [p[0], p[1]]
     const m = metaRef.current!
     return [Math.max(0, Math.min(m.width, p[0])), Math.max(0, Math.min(m.height, p[1]))]
   }
   const onImage = (p: Pt) => {
+    if (free) return true
     const m = metaRef.current!
     return p[0] >= 0 && p[1] >= 0 && p[0] <= m.width && p[1] <= m.height
   }
@@ -962,9 +1049,9 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   /** labelme asks for a label when no class is picked, or always with display_label_popup */
   const askLabel = (request: LabelRequest) =>
     new Promise<LabelChoice | null>((resolve) => setDialog({ ...request, resolve }))
-  const finishShape = async (type: ShapeType, points: Pt[], extra: Partial<Shape> = {}) => {
-    const m = metaRef.current
-    if (!m) return
+  /** New shapes from a tool: labelled with the class picked, or as the label dialog says; `retry` when it's cancelled */
+  const addShapes = async (made: Shape[], retry?: () => void) => {
+    if (!metaRef.current || !made.length) return
     const picked = currentLabel()
     let label = picked
     let flags = picked ? flagsFor(picked, config.label_flags) : {}
@@ -974,7 +1061,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       const choice = await askLabel({ text: picked ?? '', flags: null, group_id: null, description: null, at: screenMouse.current })
       if (!choice) {
         // labelme goes back to drawing, so a slip on the last click isn't the end of the shape
-        if (type === 'polygon' || type === 'linestrip') draft.current = { points, labels: [], preview: null }
+        retry?.()
         invalidate()
         return
       }
@@ -984,57 +1071,94 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       description = choice.description
     }
     if (!label) return
-    const [shape] = forFormat([newShape(label, type, points, { flags, group_id, description, ...extra })])
-    const next = [...shapesRef.current, shape]
+    // An AI tool's polygons of one object share a group ID, unless the dialog gave one
+    const list = forFormat(made.map((s) => ({ ...s, label: label!, flags: { ...flags }, group_id: group_id ?? s.group_id, description: description || s.description })))
+    const next = [...shapesRef.current, ...list]
     setShapes(next)
-    setSelected([next.length - 1])
+    setSelected(list.map((_, k) => next.length - list.length + k))
     const at = classes.findIndex((c) => c.name === label)
     if (at >= 0) setActiveClass(at)
     // LabelImg's beginner mode: one shape, then back to editing
     if (!settingsRef.current.advanced) setMode('edit')
   }
+  const finishShape = (type: ShapeType, points: Pt[], extra: Partial<Shape> = {}) =>
+    addShapes([newShape('', type, points, extra)], type === 'polygon' || type === 'linestrip'
+      ? () => { draft.current = { points, labels: [], preview: [], matched: [] } }
+      : undefined)
   const finishDraft = () => {
     const dr = draft.current
     const md = opts.current.mode
     if (!dr) return
-    if (md === 'ai_polygon' || md === 'ai_mask') return finishAi()
+    if (md === 'ai_points') return finishAi()
     draft.current = null
     if (md === 'polygon' && dr.points.length >= 3) finishShape('polygon', dr.points)
     else if (md === 'linestrip' && dr.points.length >= 2) finishShape('linestrip', dr.points)
     invalidate()
   }
 
-  // AI polygon and mask: each click refines the shape, as in labelme
-  const runAi = async () => {
-    const dr = draft.current
-    const m = metaRef.current
-    const name = loadedName.current
-    if (!dr || !m || !name) return
+  // labelme 7's AI tools: AI points (each click refines the object), AI box, and the text prompt
+  const toShape = (p: ProposedShape) =>
+    newShape(p.label ?? '', p.shape_type, p.points, { mask: p.mask ?? null, description: p.description ?? '', group_id: p.group_id ?? null })
+  const drawnShapes = (): DrawnShape[] => shapesRef.current.map((s) => ({ shape_type: s.shape_type, points: s.points, label: s.label, mask: s.mask }))
+  const groupsInUse = () => shapesRef.current.flatMap((s) => (s.group_id === null ? [] : [s.group_id]))
+  // LabelImg's formats keep boxes, so AI tools make boxes there
+  const aiOutput = () => (holdsBoxesOnly(formatRef.current) ? 'rectangle' : settingsRef.current.aiOutput)
+  const megabytes = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`)
+
+  /** A model that isn't downloaded yet is downloaded first, when the user agrees */
+  const ensureModel = async (name: string) => {
+    const info = models?.find((x) => x.name === name)
+    if (!info) return false
+    if (info.downloaded) return true
+    const ok = await window.api.ask(`Download ${info.title}?`, `It's ${megabytes(info.size)} under the ${info.license.name}, downloaded once from the address labelme uses, and kept in ~/.cache/osam.`, ['Download', 'Cancel'])
+    if (ok !== 0) return false
+    try {
+      setBusyAi('Downloading the model…')
+      await window.api.aiDownload(name)
+      return true
+    } catch (e) {
+      if (!/cancelled/.test(plainError(e))) onError(`The model couldn't be downloaded: ${plainError(e)}`)
+      return false
+    } finally {
+      // Cancelled or failed, a download sends no last progress of its own
+      setDownload(null)
+      setBusyAi('')
+      setModels(await window.api.aiModels())
+    }
+  }
+  /** The click and box tools' model, if it takes what the tool gives it */
+  const assistModel = (what: 'points' | 'box') => {
     const model = settingsRef.current.aiModel
     const info = models?.find((x) => x.name === model)
-    if (info && !info.downloaded) {
-      const ok = await window.api.ask(`Download ${info.title}?`, `It's ${Math.round(info.size / 1e6)} MB, downloaded once from the address labelme uses, and kept in ~/.cache/osam.`, ['Download', 'Cancel'])
-      if (ok !== 0) { draft.current = null; invalidate(); return }
-      try {
-        setBusyAi('Downloading the model…')
-        await window.api.aiDownload(model)
-        setModels(await window.api.aiModels())
-      } catch (e) {
-        onError(`The model couldn't be downloaded: ${plainError(e)}`)
-        draft.current = null
-        setBusyAi('')
-        invalidate()
-        return
-      }
+    if (info && !info[what]) {
+      setNotice(`${info.title} takes ${info.points ? 'clicks' : 'boxes'} only: pick another model, or use AI ${info.points ? 'points' : 'box'}.`)
+      return null
+    }
+    return model
+  }
+  const assistRequest = (model: string, points: Pt[], labels: number[]) => ({
+    root, name: loadedName.current, model, points, labels, output: aiOutput(), detail: config.mask_polygonization.detail,
+    drawn: config.ai.suppress_existing_shape_matches ? drawnShapes() : null, groups: groupsInUse(), outside: free
+  })
+  const runAi = async () => {
+    const dr = draft.current
+    const name = loadedName.current
+    if (!dr || !metaRef.current || !name) return
+    const model = assistModel('points')
+    if (!model || !(await ensureModel(model))) {
+      draft.current = null
+      invalidate()
+      return
     }
     const seq = ++aiSeq.current
     setBusyAi('Segmenting…')
     try {
-      const result = await window.api.aiSegment(root, name, model, dr.points, dr.labels, opts.current.mode === 'ai_mask' ? 'mask' : 'polygon')
+      const before = shapesRef.current
+      const result = await window.api.aiAssist(assistRequest(model, dr.points, dr.labels))
       if (seq !== aiSeq.current || draft.current !== dr || loadedName.current !== name) return
-      dr.preview = result.kind === 'polygon' ? newShape('', 'polygon', result.points)
-        : result.kind === 'mask' ? newShape('', 'mask', result.box, { mask: result.mask }) : null
-      if (result.kind === 'none') setNotice('The model found nothing there. Try another point.')
+      dr.preview = result.shapes.map(toShape)
+      dr.matched = result.matched.map((i) => before[i]).filter(Boolean)
+      if (!result.shapes.length) setNotice(result.matched.length ? 'That object is drawn already.' : 'The model found nothing there. Try another point.')
       invalidate()
     } catch (e) {
       if (seq === aiSeq.current) onError(`AI segmentation failed: ${plainError(e)}`)
@@ -1047,11 +1171,66 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     if (!dr) return
     // Wait for the last click's result
     while (busyAiRef.current && draft.current === dr) await new Promise((r) => setTimeout(r, 30))
-    if (draft.current !== dr || !dr.preview) return
+    if (draft.current !== dr) return
     draft.current = null
-    const p = dr.preview
-    await finishShape(p.shape_type, p.points, p.mask ? { mask: p.mask } : {})
+    // Nothing new: the shapes it found again are picked out instead
+    if (!dr.preview.length) setSelected(dr.matched.map((m) => shapesRef.current.indexOf(m)).filter((i) => i >= 0))
+    else await addShapes(dr.preview)
     invalidate()
+  }
+  const runBox = async (a: Pt, b: Pt) => {
+    const name = loadedName.current
+    const model = assistModel('box')
+    if (!model || !name) return
+    // Escape or another tool while the model downloads drops the box
+    const seq = ++aiSeq.current
+    if (!(await ensureModel(model)) || seq !== aiSeq.current) return
+    const box = [[Math.min(a[0], b[0]), Math.min(a[1], b[1])], [Math.max(a[0], b[0]), Math.max(a[1], b[1])]]
+    setBusyAi('Segmenting…')
+    try {
+      const before = shapesRef.current
+      const result = await window.api.aiAssist(assistRequest(model, box, [2, 3]))
+      if (seq !== aiSeq.current || loadedName.current !== name) return
+      setBusyAi('')
+      if (result.shapes.length) await addShapes(result.shapes.map(toShape))
+      else if (result.matched.length) {
+        setSelected(result.matched.map((i) => shapesRef.current.indexOf(before[i])).filter((i) => i >= 0))
+        setNotice('That object is drawn already.')
+      } else setNotice('The model found nothing in that box.')
+    } catch (e) {
+      if (seq === aiSeq.current) onError(`AI segmentation failed: ${plainError(e)}`)
+    } finally {
+      if (seq === aiSeq.current) setBusyAi('')
+    }
+  }
+  /** labelme's AI Text Prompt: every object the words name, labelled with the word */
+  const runText = async () => {
+    const name = loadedName.current
+    if (!name || readOnlyRef.current) return
+    const texts = aiPrompt.split(',').map((t) => t.trim()).filter(Boolean)
+    if (!texts.length) return setNotice('Type what to find, such as dog,cat,bird.')
+    const model = settingsRef.current.aiTextModel
+    const seq = ++aiSeq.current
+    if (!(await ensureModel(model)) || seq !== aiSeq.current) return
+    setBusyAi('Finding…')
+    try {
+      const result = await window.api.aiText({
+        root, name, model, texts, output: aiOutput(), detail: config.mask_polygonization.detail, drawn: drawnShapes(), groups: groupsInUse(),
+        outside: free, iou: aiIou, score: aiScore
+      })
+      if (seq !== aiSeq.current || loadedName.current !== name) return
+      if (result.notice) return setNotice(result.notice)
+      if (!result.shapes.length) return setNotice(`Nothing new found for ${texts.join(', ')}.`)
+      const found = forFormat(result.shapes.map((p) => ({ ...toShape(p), flags: flagsFor(p.label ?? '', config.label_flags) })))
+      const next = [...shapesRef.current, ...found]
+      setShapes(next)
+      setSelected(found.map((_, k) => next.length - found.length + k))
+      setNotice(`Found ${found.length} ${found.length === 1 ? 'shape' : 'shapes'}.`)
+    } catch (e) {
+      if (seq === aiSeq.current) onError(`The text prompt failed: ${plainError(e)}`)
+    } finally {
+      if (seq === aiSeq.current) setBusyAi('')
+    }
   }
   const busyAiRef = useRef('')
   busyAiRef.current = busyAi
@@ -1071,10 +1250,15 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     const order = [...selectedRef.current, ...list.map((_, i) => list.length - 1 - i).filter((i) => !selectedRef.current.includes(i))]
     for (const i of order) {
       const s = list[i]
-      // A lock keeps a shape's geometry; an oriented rectangle's corners move together
-      if (!s || s.hidden || s.locked || s.shape_type === 'mask' || s.shape_type === 'oriented_rectangle') continue
+      // A lock keeps a shape's geometry
+      if (!s || s.hidden || s.locked || s.shape_type === 'mask') continue
       const v = nearestVertex(s, p, tol)
       if (v >= 0) return { shape: i, vertex: v, edge: -1 }
+      // A selected rotated box turns by the handles at the middle of its edges
+      if (s.shape_type === 'oriented_rectangle' && s.points.length === 4 && selectedRef.current.includes(i)) {
+        const r = rotationHandles(s.points).findIndex((q) => Math.hypot(q[0] - p[0], q[1] - p[1]) <= tol)
+        if (r >= 0) return { shape: i, vertex: -1, edge: -1, rotate: r }
+      }
     }
     for (const i of order) {
       const s = list[i]
@@ -1122,21 +1306,24 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
         if (md === 'linestrip' && (e.ctrlKey || e.metaKey)) return finishDraft()
         invalidate()
       } else if (onImage(p)) {
-        draft.current = { points: [p], labels: [], preview: null }
+        draft.current = { points: [p], labels: [], preview: [], matched: [] }
         invalidate()
       }
       return
     }
-    if (!ro && (md === 'rectangle' || md === 'circle' || md === 'line')) {
+    if (!ro && (md === 'rectangle' || md === 'circle' || md === 'line' || md === 'ai_box')) {
       const dr = draft.current
       if (dr) {
         const q = livePoint()!
         draft.current = null
         const second = md === 'rectangle' && squareKeys(e) ? squareFrom(dr.points[0], q) : q
-        if (Math.hypot(second[0] - dr.points[0][0], second[1] - dr.points[0][1]) > 0.5) finishShape(md, [dr.points[0], second])
+        if (Math.hypot(second[0] - dr.points[0][0], second[1] - dr.points[0][1]) > 0.5) {
+          if (md === 'ai_box') runBox(dr.points[0], second)
+          else finishShape(md, [dr.points[0], second])
+        }
         invalidate()
       } else if (onImage(p)) {
-        draft.current = { points: [p], labels: [], preview: null }
+        draft.current = { points: [p], labels: [], preview: [], matched: [] }
         drag.current = { kind: 'two', press }
         invalidate()
       }
@@ -1146,9 +1333,26 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       if (onImage(p)) finishShape('point', [p])
       return
     }
-    if (!ro && (md === 'ai_polygon' || md === 'ai_mask')) {
+    if (!ro && md === 'oriented_rectangle') {
+      // labelme 7's rotated box: a corner, the next corner along one side, then the width
+      const dr = draft.current
+      if (!dr) {
+        if (onImage(p)) draft.current = { points: [p], labels: [], preview: [], matched: [] }
+      } else if (dr.points.length === 1) {
+        const q = livePoint()!
+        if (Math.hypot(q[0] - dr.points[0][0], q[1] - dr.points[0][1]) > 0.5) dr.points = [dr.points[0], q, [q[0], q[1]], [dr.points[0][0], dr.points[0][1]]]
+      } else {
+        const corners = reprojectCorners(dr.points, 2, livePoint()!, imageSize())
+        draft.current = null
+        const area = Math.abs(corners.reduce((a, q, k) => a + q[0] * corners[(k + 1) % 4][1] - corners[(k + 1) % 4][0] * q[1], 0)) / 2
+        if (area > 0.5) finishShape('oriented_rectangle', corners)
+      }
+      invalidate()
+      return
+    }
+    if (!ro && md === 'ai_points') {
       if (!onImage(p)) return
-      const dr = draft.current ?? (draft.current = { points: [], labels: [], preview: null })
+      const dr = draft.current ?? (draft.current = { points: [], labels: [], preview: [], matched: [] })
       dr.points.push(p)
       dr.labels.push(e.shiftKey ? 0 : 1)
       invalidate()
@@ -1168,13 +1372,19 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     const multi = e.ctrlKey || e.metaKey
     if (h && !ro) {
       const s = list[h.shape]
+      if (h.rotate !== undefined) {
+        const center = boxCenter(s.points)
+        const handle = rotationHandles(s.points)[h.rotate]
+        drag.current = { kind: 'rotate', shape: h.shape, center, angle: Math.atan2(handle[1] - center[1], handle[0] - center[0]), press, active: false, start: list }
+        return
+      }
       if (h.vertex >= 0 && e.altKey) {
         // Alt+click, or labelme's Alt+Shift+click, takes a point away
         if (canRemovePoint(s)) setShapes(list.map((q, i) => (i === h.shape ? { ...accepted(q), points: q.points.filter((_, k) => k !== h.vertex) } : q)))
         hover.current = null
         return
       }
-      if (h.vertex < 0 && h.edge >= 0 && e.altKey) {
+      if (h.vertex < 0 && h.edge >= 0 && e.altKey && EDITABLE_POINTS.has(s.shape_type)) {
         // labelme's Alt+click on an edge adds a point there, and it can be dragged at once
         const point = clampPoint(p)
         const start = list
@@ -1225,14 +1435,14 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
         if (h?.shape !== before?.shape || h?.vertex !== before?.vertex || h?.edge !== before?.edge) {
           hover.current = h
           const c = canvasRef.current!
-          c.style.cursor = h?.vertex !== undefined && h.vertex >= 0 ? 'move' : h?.edge !== undefined && h.edge >= 0 && e.altKey ? 'copy' : h ? 'pointer' : ''
+          c.style.cursor = h?.rotate !== undefined ? 'grab' : h?.vertex !== undefined && h.vertex >= 0 ? 'move' : h?.edge !== undefined && h.edge >= 0 && e.altKey ? 'copy' : h ? 'pointer' : ''
           invalidate()
         }
       }
-      if (draft.current || mode === 'brush' || mode === 'eraser' || (config.canvas.crosshair as Record<string, boolean>)[mode]) invalidate()
+      if (draft.current || mode === 'brush' || mode === 'eraser' || (config.canvas.crosshair as Record<string, boolean>)[CROSSHAIR[mode] ?? mode]) invalidate()
       return
     }
-    if ((d.kind === 'vertex' || d.kind === 'move' || d.kind === 'pan' || d.kind === 'ghost') && !('active' in d ? d.active : d.moved)) {
+    if ((d.kind === 'vertex' || d.kind === 'move' || d.kind === 'pan' || d.kind === 'ghost' || d.kind === 'rotate') && !('active' in d ? d.active : d.moved)) {
       // A slip of the hand during a click isn't a drag
       if (Math.hypot(e.clientX - d.press[0], e.clientY - d.press[1]) < DRAG_START) return
       if (d.kind === 'pan') d.moved = true
@@ -1248,10 +1458,16 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     } else if (d.kind === 'stroke') {
       const last = d.points[d.points.length - 1]
       if (Math.hypot(p[0] - last[0], p[1] - last[1]) >= d.radius * 0.4) d.points.push(p)
+    } else if (d.kind === 'rotate') {
+      const s = d.start[d.shape]
+      const turn = Math.atan2(p[1] - d.center[1], p[0] - d.center[0]) - d.angle
+      shapesRef.current = shapesRef.current.map((x, i) => (i === d.shape ? { ...x, points: rotatePoints(s.points, d.center, turn) } : x))
     } else if (d.kind === 'vertex' && m) {
       const s = d.start[d.shape]
       let q = clampPoint(p)
-      if (s.shape_type === 'rectangle' && s.points.length === 2) {
+      if (s.shape_type === 'oriented_rectangle' && s.points.length === 4) {
+        shapesRef.current = shapesRef.current.map((x, i) => (i === d.shape ? { ...x, points: reprojectCorners(s.points, d.vertex, p, imageSize()) } : x))
+      } else if (s.shape_type === 'rectangle' && s.points.length === 2) {
         // Any of the four corners moves, the one across stays; square as when drawing it
         if (squareKeys(e)) q = squareFrom(vertices(s)[(d.vertex + 2) % 4], q)
         shapesRef.current = shapesRef.current.map((x, i) => (i === d.shape ? moveCorner(s, d.vertex, q) : x))
@@ -1283,6 +1499,13 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   }
 
   const onPointerUp = (e: React.PointerEvent) => {
+    releasePointer(e)
+    if (pendingFit.current) {
+      pendingFit.current = false
+      if (settingsRef.current.fit === 'selection') fitSelection()
+    }
+  }
+  const releasePointer = (e: React.PointerEvent) => {
     const d = drag.current
     drag.current = null
     if (!d) return
@@ -1296,25 +1519,30 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
         const q = livePoint()!
         const second = mode === 'rectangle' && squareKeys(e) ? squareFrom(dr.points[0], q) : q
         draft.current = null
-        if (Math.hypot(second[0] - dr.points[0][0], second[1] - dr.points[0][1]) > 0.5) finishShape(mode as ShapeType, [dr.points[0], second])
+        if (Math.hypot(second[0] - dr.points[0][0], second[1] - dr.points[0][1]) > 0.5) {
+          if (mode === 'ai_box') runBox(dr.points[0], second)
+          else finishShape(mode as ShapeType, [dr.points[0], second])
+        }
       }
       invalidate()
-    } else if (d.kind === 'vertex' || d.kind === 'move') {
+    } else if (d.kind === 'vertex' || d.kind === 'move' || d.kind === 'rotate') {
       // A click only selects: looking at an AI shape must not accept it
       if (!d.active) {
         shapesRef.current = d.start
         return
       }
-      const moved = new Set(d.kind === 'vertex' ? [d.shape] : d.shapes)
+      const moved = new Set(d.kind === 'move' ? d.shapes : [d.shape])
       undo.current.push(d.start)
       if (undo.current.length > config.canvas.num_backups) undo.current.shift()
       redo.current = []
       apply(shapesRef.current.map((s, i) => (moved.has(i) && isAi(s) ? accepted(s) : s)))
     } else if (d.kind === 'pan' && d.button === 2 && !d.moved) {
+      menuPoint.current = toImage(e)
       onOpenMenu(e.clientX, e.clientY)
     } else if (d.kind === 'ghost') {
       if (!d.active || !ghost.current) {
         ghost.current = null
+        menuPoint.current = toImage(e)
         onOpenMenu(e.clientX, e.clientY)
       } else setGhostMenu({ x: e.clientX, y: e.clientY })
       invalidate()
@@ -1358,7 +1586,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       finishDraft()
       return
     }
-    if (mode === 'ai_polygon' || mode === 'ai_mask') {
+    if (mode === 'ai_points') {
       if (config.canvas.double_click === 'close') finishAi()
       return
     }
@@ -1555,11 +1783,76 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     copySelected()
     paste()
   }
-  const merge = () => {
-    const result = mergePolygons(shapesRef.current, selectedRef.current.filter((i) => !shapesRef.current[i]?.locked))
-    if (!result) return setNotice('Select two or more polygons or boxes to merge.')
+  const merge = async () => {
+    const list = shapesRef.current
+    const which = selectedRef.current.filter((i) => !list[i]?.locked)
+    if (which.length >= 2 && which.every((i) => list[i].shape_type === 'mask' && list[i].mask)) {
+      // labelme 7's Merge Shapes for masks: one label, every pixel kept, in the first one's place
+      if (new Set(which.map((i) => list[i].label)).size !== 1) return setNotice('Masks merge when they share one label.')
+      const merged = await window.api.mergeMasks(which.map((i) => ({ points: list[i].points, mask: list[i].mask! })))
+      if (shapesRef.current !== list) return
+      const shape = { ...accepted(list[which[0]]), points: merged.points, mask: merged.mask }
+      const next = list.flatMap((s, i) => (i === which[0] ? [shape] : which.includes(i) ? [] : [s]))
+      setShapes(next)
+      setSelected([next.indexOf(shape)])
+      return
+    }
+    const result = mergePolygons(list, which)
+    if (!result) return setNotice('Select two or more polygons or boxes, or masks of one label, to merge.')
     setShapes(result.shapes)
     setSelected(result.selected)
+  }
+  /** labelme 7's Add Point to Edge: a point where the menu was opened, on the selected shape's nearest edge */
+  const addPointToEdge = () => {
+    const i = selectedRef.current[0]
+    const s = shapesRef.current[i]
+    if (!s || s.locked || !EDITABLE_POINTS.has(s.shape_type)) return
+    const p = menuPoint.current ?? mouse.current
+    const edge = nearestEdge(s, p, Infinity)
+    if (edge < 0) return
+    const [a, b] = edges(s)[edge].map((k) => s.points[k])
+    const dx = b[0] - a[0], dy = b[1] - a[1]
+    const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1)))
+    setShapes(shapesRef.current.map((q, k) => (k === i ? insertPoint(q, edge, [a[0] + t * dx, a[1] + t * dy]) : q)))
+  }
+  /** labelme 7's Ctrl+arrow: the nearest shape that way, within 90°, a sideways step costing double */
+  const selectNeighbour = (vx: number, vy: number) => {
+    const list = shapesRef.current
+    const center = (b: number[]) => [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2]
+    const candidates = list.map((s, i) => ({ s, i })).filter(({ s, i }) => !s.hidden && !selectedRef.current.includes(i))
+    if (!selectedRef.current.length) {
+      if (!candidates.length) return
+      const [first] = [...candidates].sort((a, b) => {
+        const ca = center(bounds(a.s)), cb = center(bounds(b.s))
+        return Math.abs(ca[0]) + Math.abs(ca[1]) - (Math.abs(cb[0]) + Math.abs(cb[1]))
+      })
+      return setSelected([first.i])
+    }
+    const chosen = selectedRef.current.map((i) => bounds(list[i]))
+    const origin = center([Math.min(...chosen.map((b) => b[0])), Math.min(...chosen.map((b) => b[1])), Math.max(...chosen.map((b) => b[2])), Math.max(...chosen.map((b) => b[3]))])
+    let best = -1, bestCost = Infinity
+    for (const { s, i } of candidates) {
+      const c = center(bounds(s))
+      const dx = c[0] - origin[0], dy = c[1] - origin[1]
+      const along = dx * vx + dy * vy, sideways = Math.abs(dx * vy - dy * vx)
+      if (along > 0 && sideways <= along && along + 2 * sideways < bestCost) { bestCost = along + 2 * sideways; best = i }
+    }
+    if (best >= 0) setSelected([best])
+  }
+  /** labelme 7's Fit to Selection: the view fits the selected shapes, with a margin */
+  const fitSelection = () => {
+    const canvas = canvasRef.current
+    const chosen = selectedRef.current.map((i) => shapesRef.current[i]).filter(Boolean)
+    if (!canvas || !metaRef.current || !chosen.length) return
+    const all = chosen.map(bounds)
+    const x0 = Math.min(...all.map((b) => b[0])), y0 = Math.min(...all.map((b) => b[1]))
+    const x1 = Math.max(...all.map((b) => b[2])), y1 = Math.max(...all.map((b) => b[3]))
+    const pad = 48
+    const scale = Math.min((canvas.clientWidth - pad * 2) / Math.max(x1 - x0, 1), (canvas.clientHeight - pad * 2) / Math.max(y1 - y0, 1), config.max_zoom / 100)
+    view.current = { scale, x: canvas.clientWidth / 2 - ((x0 + x1) / 2) * scale, y: canvas.clientHeight / 2 - ((y0 + y1) / 2) * scale }
+    lastScale.current = scale
+    setZoom(scale)
+    invalidate()
   }
   const removeHoveredPoint = () => {
     const h = hover.current
@@ -1584,10 +1877,13 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   const undoLastPoint = () => {
     const dr = draft.current
     if (!dr) return false
-    dr.points.pop()
-    dr.labels.pop()
+    if (mode === 'oriented_rectangle' && dr.points.length === 4) dr.points = [dr.points[0]]
+    else {
+      dr.points.pop()
+      dr.labels.pop()
+    }
     if (!dr.points.length) draft.current = null
-    else if (mode === 'ai_polygon' || mode === 'ai_mask') runAi()
+    else if (mode === 'ai_points') runAi()
     invalidate()
     return true
   }
@@ -1893,38 +2189,46 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     save_as: { label: 'Save as…', run: saveAs, shortcut: 'save_as', enabled: has },
     delete_file: { label: 'Delete label file', run: deleteLabelFile, shortcut: 'delete_file', enabled: () => !!images[index]?.labelled },
     auto_save: { label: 'Save automatically', run: () => setSettings((s) => ({ ...s, autoSave: !s.autoSave })), checked: () => settings.autoSave },
-    store_data: { label: 'Save with image data', run: () => setSettings((s) => ({ ...s, storeData: !s.storeData })), checked: () => settings.storeData },
+    with_image_data: { label: 'Save with image data', run: () => setSettings((s) => ({ ...s, storeData: !s.storeData })), checked: () => settings.storeData },
     reveal: { label: 'Show in folder', run: () => loadedName.current && window.api.reveal(root, loadedName.current), enabled: () => !!loadedName.current },
 
     create_polygon: { label: 'Create polygons', run: () => setMode('polygon'), shortcut: 'create_polygon', checked: () => mode === 'polygon', enabled: draws('polygon') },
     create_rectangle: { label: 'Create rectangle', run: () => setMode('rectangle'), shortcut: 'create_rectangle', checked: () => mode === 'rectangle', enabled: has },
+    create_oriented_rectangle: {
+      label: 'Create rotated box', run: () => setMode('oriented_rectangle'), shortcut: 'create_oriented_rectangle', checked: () => mode === 'oriented_rectangle', enabled: draws('oriented_rectangle')
+    },
     create_circle: { label: 'Create circle', run: () => setMode('circle'), shortcut: 'create_circle', checked: () => mode === 'circle', enabled: draws('circle') },
     create_line: { label: 'Create line', run: () => setMode('line'), shortcut: 'create_line', checked: () => mode === 'line', enabled: draws('line') },
     create_point: { label: 'Create point', run: () => setMode('point'), shortcut: 'create_point', checked: () => mode === 'point', enabled: draws('point') },
     create_linestrip: { label: 'Create line strip', run: () => setMode('linestrip'), shortcut: 'create_linestrip', checked: () => mode === 'linestrip', enabled: draws('linestrip') },
-    create_ai_polygon: { label: 'Create AI polygon', run: () => setMode('ai_polygon'), shortcut: 'create_ai_polygon', checked: () => mode === 'ai_polygon', enabled: () => has() && !!models },
-    create_ai_mask: { label: 'Create AI mask', run: () => setMode('ai_mask'), shortcut: 'create_ai_mask', checked: () => mode === 'ai_mask', enabled: () => has() && !!models },
+    create_ai_points: { label: 'AI points', run: () => setMode('ai_points'), shortcut: 'create_ai_points_to_shape', checked: () => mode === 'ai_points', enabled: () => has() && !!models },
+    create_ai_box: { label: 'AI box', run: () => setMode('ai_box'), shortcut: 'create_ai_box_to_shape', checked: () => mode === 'ai_box', enabled: () => has() && !!models },
     create_brush: { label: 'Brush', run: () => setMode('brush'), shortcut: 'create_brush', checked: () => mode === 'brush', enabled: draws('brush') },
     create_eraser: { label: 'Eraser', run: () => setMode('eraser'), shortcut: 'create_eraser', checked: () => mode === 'eraser', enabled: draws('eraser') },
     draw_squares: { label: 'Draw squares', run: () => setSettings((s) => ({ ...s, drawSquares: !s.drawSquares })), shortcut: 'draw_squares', checked: () => settings.drawSquares },
-    edit_polygon: { label: 'Edit polygons', run: () => setMode('edit'), shortcut: 'edit_polygon', checked: () => mode === 'edit' },
+    edit_shape: { label: 'Edit polygons', run: () => setMode('edit'), shortcut: 'edit_shape', checked: () => mode === 'edit' },
     edit_label: { label: 'Edit label…', run: () => editLabel(), shortcut: 'edit_label', enabled: () => has() && sel() },
-    duplicate_polygon: { label: 'Duplicate', run: duplicate, shortcut: 'duplicate_polygon', enabled: () => has() && sel() },
-    copy_polygon: { label: 'Copy', run: copySelected, shortcut: 'copy_polygon', enabled: sel },
-    paste_polygon: { label: 'Paste', run: paste, shortcut: 'paste_polygon', enabled: () => has() && clipboard.current.length > 0 },
-    delete_polygon: { label: 'Delete', run: removeSelected, shortcut: 'delete_polygon', enabled: () => has() && sel() },
-    merge_polygons: { label: 'Merge polygons', run: merge, shortcut: 'merge_polygons', enabled: () => has() && selectedRef.current.length >= 2 && !boxesOnly },
+    duplicate_shape: { label: 'Duplicate', run: duplicate, shortcut: 'duplicate_shape', enabled: () => has() && sel() },
+    copy_shape: { label: 'Copy', run: copySelected, shortcut: 'copy_shape', enabled: sel },
+    paste_shape: { label: 'Paste', run: paste, shortcut: 'paste_shape', enabled: () => has() && clipboard.current.length > 0 },
+    delete_shape: { label: 'Delete', run: removeSelected, shortcut: 'delete_shape', enabled: () => has() && sel() },
+    merge_shapes: { label: 'Merge shapes', run: merge, shortcut: 'merge_shapes', enabled: () => has() && selectedRef.current.length >= 2 && !boxesOnly },
     undo: { label: 'Undo', run: () => (undoLastPoint() || stepHistory(undo, redo)), shortcut: 'undo', enabled: () => has() && (undo.current.length > 0 || !!draft.current || !!reviewBack.current) },
     redo: { label: 'Redo', run: () => stepHistory(redo, undo), shortcut: 'redo', enabled: () => has() && redo.current.length > 0 },
     remove_selected_point: { label: 'Remove point', run: removeHoveredPoint, shortcut: 'remove_selected_point', enabled: has },
     add_multiple_points: { label: 'Add points to edge…', run: addMultiplePoints, shortcut: 'add_multiple_points', enabled: has },
+    add_point_to_edge: { label: 'Add point to edge', run: addPointToEdge, enabled: () => has() && selectedRef.current.length === 1 && EDITABLE_POINTS.has(shapesRef.current[selectedRef.current[0]]?.shape_type) },
+    select_shape_up: { label: 'Select the shape above', run: () => selectNeighbour(0, -1), shortcut: 'select_shape_up', enabled: () => shapesRef.current.length > 0 },
+    select_shape_down: { label: 'Select the shape below', run: () => selectNeighbour(0, 1), shortcut: 'select_shape_down', enabled: () => shapesRef.current.length > 0 },
+    select_shape_left: { label: 'Select the shape to the left', run: () => selectNeighbour(-1, 0), shortcut: 'select_shape_left', enabled: () => shapesRef.current.length > 0 },
+    select_shape_right: { label: 'Select the shape to the right', run: () => selectNeighbour(1, 0), shortcut: 'select_shape_right', enabled: () => shapesRef.current.length > 0 },
     toggle_lock: {
       label: 'Lock shapes', run: () => {
         const which = selectedRef.current
         const lock = !which.every((i) => shapesRef.current[i]?.locked)
         setShapes(shapesRef.current.map((x, i) => (which.includes(i) ? { ...x, locked: lock || undefined } : x)))
       },
-      enabled: () => has() && sel(), checked: () => sel() && selectedRef.current.every((i) => shapesRef.current[i]?.locked)
+      shortcut: 'lock_shape', enabled: () => has() && sel(), checked: () => sel() && selectedRef.current.every((i) => shapesRef.current[i]?.locked)
     },
     toggle_difficult: {
       label: 'Difficult', run: toggleDifficult, shortcut: 'toggle_difficult', enabled: () => has() && sel() && keepsDifficult(settings.format),
@@ -1944,13 +2248,14 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     shape_fill_color: { label: 'Shape fill colour…', run: () => pickColor('fill'), shortcut: 'shape_fill_color', enabled: () => has() && sel() },
 
     fill_drawing: { label: 'Fill polygon while drawing', run: () => setSettings((s) => ({ ...s, fillDrawing: !s.fillDrawing })), checked: () => settings.fillDrawing },
-    hide_all_polygons: { label: 'Hide shapes', run: () => setShowShapes(false), shortcut: 'hide_all_polygons' },
-    show_all_polygons: { label: 'Show shapes', run: () => setShowShapes(true), shortcut: 'show_all_polygons' },
-    toggle_all_polygons: { label: 'Show shapes', run: () => setShowShapes((v) => !v), shortcut: 'toggle_all_polygons', checked: () => showShapes },
+    hide_all_shapes: { label: 'Hide shapes', run: () => setShowShapes(false), shortcut: 'hide_all_shapes' },
+    show_all_shapes: { label: 'Show shapes', run: () => setShowShapes(true), shortcut: 'show_all_shapes' },
+    toggle_all_shapes: { label: 'Show shapes', run: () => setShowShapes((v) => !v), shortcut: 'toggle_all_shapes', checked: () => showShapes },
     zoom_in: { label: 'Zoom in', run: () => zoomBy(config.zoom_increment), shortcut: 'zoom_in', enabled: () => !!metaRef.current },
     zoom_out: { label: 'Zoom out', run: () => zoomBy(1 / config.zoom_increment), shortcut: 'zoom_out', enabled: () => !!metaRef.current },
     zoom_to_original: { label: 'Original size', run: () => { setFit('manual'); setScale(1) }, shortcut: 'zoom_to_original', enabled: () => !!metaRef.current },
     fit_window: { label: 'Fit window', run: () => { setFit('window'); fit('window') }, shortcut: 'fit_window', checked: () => settings.fit === 'window' },
+    fit_selection: { label: 'Fit to selection', run: () => { setFit('selection'); fitSelection() }, shortcut: 'fit_selection', checked: () => settings.fit === 'selection' },
     fit_width: { label: 'Fit width', run: () => { setFit('width'); fit('width') }, shortcut: 'fit_width', checked: () => settings.fit === 'width' },
     keep_prev_scale: { label: 'Keep previous scale', run: () => setSettings((s) => ({ ...s, keepPrevScale: !s.keepPrevScale })), checked: () => settings.keepPrevScale },
     brightness_contrast: { label: 'Brightness and contrast…', run: () => setBcOpen(true), enabled: () => !!metaRef.current },
@@ -1962,13 +2267,18 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     review_accept_all: { label: 'Accept all here, then next', run: acceptAll, shortcut: 'review_accept_all' },
     order_certainty: { label: 'Least certain first', run: () => setSort((s) => (s === 'certainty' ? 'name' : 'certainty')), checked: () => sort === 'certainty' },
     prelabel_pick: { label: 'Choose a model…', run: pickModel },
+    ai_models: { label: 'AI models…', run: () => setModelsOpen(true), enabled: () => !!models },
     prelabel_one: { label: 'Pre-label this image', run: prelabelOne, enabled: () => has() && !batch && !busyAi && !boxesOnly },
     prelabel_all: { label: `Pre-label ${toPrelabel.length} images`, run: prelabelAll, enabled: () => !batch && toPrelabel.length > 0 && !boxesOnly },
     brush_smaller: { label: 'Smaller brush', run: () => setBrushSize((s) => Math.max(config.brush.min, s - 4)), shortcut: 'brush_smaller' },
     brush_larger: { label: 'Larger brush', run: () => setBrushSize((s) => Math.min(config.brush.max, s + 4)), shortcut: 'brush_larger' }
   }
   for (const m of models ?? []) {
-    commands[`ai_model:${m.name}`] = { label: m.title, run: () => setSettings((s) => ({ ...s, aiModel: m.name })), checked: () => settings.aiModel === m.name }
+    if (m.points || m.box) commands[`ai_model:${m.name}`] = { label: m.title, run: () => setSettings((s) => ({ ...s, aiModel: m.name })), checked: () => settings.aiModel === m.name }
+    if (m.text) commands[`ai_text_model:${m.name}`] = { label: m.textTitle ?? m.title, run: () => setSettings((s) => ({ ...s, aiTextModel: m.name })), checked: () => settings.aiTextModel === m.name }
+  }
+  for (const o of AI_OUTPUTS) {
+    commands[`ai_output:${o}`] = { label: AI_OUTPUT_NAMES[o], run: () => setSettings((s) => ({ ...s, aiOutput: o })), checked: () => settings.aiOutput === o, enabled: () => !boxesOnly }
   }
   for (const f of LABEL_FORMATS) {
     commands[`format:${f}`] = { label: FORMAT_NAMES[f], run: () => setFormat(f), checked: () => settings.format === f, enabled: () => !images[index]?.embedded }
@@ -2007,6 +2317,13 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
         spaceTap.current = null
         // Held a while, it was meant for panning
         if (pressed === null || Date.now() - pressed > 500 || drag.current || dialog || pointsPrompt || bcOpen || colorPrompt || ghostMenu) return
+        // labelme's Space finishes a shape being drawn
+        const drawing = opts.current.mode
+        if (draft.current && (drawing === 'polygon' || drawing === 'linestrip' || drawing === 'ai_points')) {
+          if (drawing === 'ai_points') finishAi()
+          else if (draft.current.points.length >= (drawing === 'polygon' ? 3 : 2)) finishDraft()
+          return
+        }
         // Space+drag pans; a tap runs the command set to Space, such as LabelImg's Verify Image
         for (const cmd of Object.values(commandsRef.current)) {
           if (cmd.shortcut && shortcutList(config.shortcuts[cmd.shortcut]).some((k) => matches(k, e, mac))) {
@@ -2113,12 +2430,13 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     edit: 'Click to select, Ctrl+click for more · drag to move · Alt+click an edge adds a point, a point removes it',
     polygon: 'Click to add points · click the first point, Enter or double-click to close',
     rectangle: 'Drag, or click two corners · Shift or Ctrl for a square',
+    oriented_rectangle: 'Click two corners along one side, then one more for its width',
     circle: 'Click the centre, then a point on the edge',
     line: 'Click both ends',
     point: 'Click to place a point',
     linestrip: 'Click to add points · Ctrl+click, Enter or double-click to finish',
-    ai_polygon: 'Click the object · Shift+click marks background · Enter or Ctrl+click to finish',
-    ai_mask: 'Click the object · Shift+click marks background · Enter or Ctrl+click to finish',
+    ai_points: 'Click the object · Shift+click marks background · Enter, Space or Ctrl+click to finish',
+    ai_box: 'Drag a box around the object',
     brush: 'Paint the selected class · [ and ] change the size',
     eraser: 'Erase from the selected shape, or anything it touches'
   }
@@ -2170,15 +2488,23 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
               <Sparkles size={15} /> Pre-label {toPrelabel.length} {toPrelabel.length === 1 ? 'image' : 'images'}
             </button>
           )}
+          <div className="annotation-folder" data-testid="annotation-folder">
+            <span title={data.outputDir ?? undefined}>
+              {images.filter((x) => x.labelled).length} of {images.length} annotated · {data.outputDir ? `in ${data.outputDir.split(/[\\/]/).filter(Boolean).pop()}` : 'next to images'}
+            </span>
+            <button className="link" onClick={onChangeOutput}>Change…</button>
+            {data.outputDir && <button className="link" onClick={onNextToImages}>Next to images</button>}
+          </div>
         </aside>
       )}
 
       <main className="stage">
         <div className="toolbar" role="toolbar" aria-label="Tools">
           <div className="seg">
-            {tool('edit', <MousePointer2 size={16} />, 'Edit', 'edit_polygon')}
+            {tool('edit', <MousePointer2 size={16} />, 'Edit', 'edit_shape')}
             {tool('polygon', <Hexagon size={16} />, 'Polygon', 'create_polygon')}
             {tool('rectangle', <Square size={16} />, 'Rectangle', 'create_rectangle')}
+            {tool('oriented_rectangle', <RectangleHorizontal size={16} className="turned" />, 'Rotated box', 'create_oriented_rectangle')}
             {tool('circle', <Circle size={16} />, 'Circle', 'create_circle')}
             {tool('line', <Slash size={16} />, 'Line', 'create_line')}
             {tool('linestrip', <Spline size={16} />, 'Line strip', 'create_linestrip')}
@@ -2190,20 +2516,31 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
           </div>
           {models && (
             <div className="seg">
-              {tool('ai_polygon', <Wand2 size={16} />, 'AI polygon', 'create_ai_polygon')}
-              {tool('ai_mask', <ScanLine size={16} />, 'AI mask', 'create_ai_mask')}
+              {tool('ai_points', <Wand2 size={16} />, 'AI points', 'create_ai_points')}
+              {tool('ai_box', <ScanLine size={16} />, 'AI box', 'create_ai_box')}
             </div>
           )}
-          {(mode === 'ai_polygon' || mode === 'ai_mask') && models && (
-            <label className="slider">Model
-              <select value={settings.aiModel} onChange={(e) => { setSettings((s) => ({ ...s, aiModel: e.target.value })); e.target.blur() }}>
-                {models.map((m) => <option key={m.name} value={m.name}>{m.title}{m.downloaded ? '' : ' (download)'}</option>)}
-              </select>
-            </label>
+          {AI_MODES.has(mode) && models && (
+            <>
+              <label className="slider">Model
+                <select value={settings.aiModel} aria-label="AI model" onChange={(e) => { setSettings((s) => ({ ...s, aiModel: e.target.value })); e.target.blur() }}>
+                  {models.filter((m) => (mode === 'ai_points' ? m.points : m.box)).map((m) => <option key={m.name} value={m.name}>{m.title}{m.downloaded ? '' : ' (download)'}</option>)}
+                </select>
+              </label>
+              <label className="slider">Makes
+                <select value={boxesOnly ? 'rectangle' : settings.aiOutput} disabled={boxesOnly} aria-label="AI output"
+                  title={boxesOnly ? `${FORMAT_NAMES[settings.format]} keeps boxes` : 'What the AI makes of what it finds'}
+                  onChange={(e) => { setSettings((s) => ({ ...s, aiOutput: e.target.value as AiOutput })); e.target.blur() }}>
+                  {AI_OUTPUTS.map((o) => <option key={o} value={o}>{AI_OUTPUT_NAMES[o]}</option>)}
+                </select>
+              </label>
+            </>
           )}
           <button className="icon" onClick={() => commands.undo.run()} title="Undo (Ctrl+Z)" aria-label="Undo"><Undo2 size={16} /></button>
           <button className="icon" onClick={() => commands.redo.run()} title="Redo (Ctrl+Shift+Z)" aria-label="Redo"><Redo2 size={16} /></button>
           <button className="icon" onClick={() => commands.fit_window.run()} title="Fit window (0)" aria-label="Fit window"><Maximize size={16} /></button>
+          <button className={`icon${settings.fit === 'selection' ? ' on' : ''}`} onClick={() => commands.fit_selection.run()} disabled={!selected.length && settings.fit !== 'selection'}
+            title="Fit to selection (Ctrl+Shift+F)" aria-label="Fit to selection"><Focus size={16} /></button>
           <button className="icon" onClick={() => setShowShapes(!showShapes)} title="Show or hide shapes (F)" aria-label="Show or hide shapes">
             {showShapes ? <Eye size={16} /> : <EyeOff size={16} />}
           </button>
@@ -2223,6 +2560,22 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
             <Sparkles size={15} /> {busyAi === 'Predicting…' ? 'Predicting…' : 'Pre-label'}
           </button>
         </div>
+        {AI_MODES.has(mode) && models && (
+          <form className="toolbar prompt" aria-label="AI text prompt" onSubmit={(e) => { e.preventDefault(); runText() }}>
+            <Type size={15} aria-hidden />
+            <input type="text" value={aiPrompt} placeholder="Find by words, such as dog,cat,bird" aria-label="Words to find" onChange={(e) => setAiPrompt(e.target.value)} />
+            <select value={settings.aiTextModel} aria-label="Text prompt model" onChange={(e) => { setSettings((s) => ({ ...s, aiTextModel: e.target.value })); e.target.blur() }}>
+              {models.filter((m) => m.text).map((m) => <option key={m.name} value={m.name}>{m.textTitle ?? m.title}{m.downloaded ? '' : ' (download)'}</option>)}
+            </select>
+            <label className="slider" title="Only finds scored at least this">Score
+              <input type="number" min={0} max={1} step={0.05} value={aiScore} aria-label="Score threshold" onChange={(e) => setAiScore(Math.max(0, Math.min(1, +e.target.value)))} />
+            </label>
+            <label className="slider" title="Finds overlapping more than this are one object">IoU
+              <input type="number" min={0} max={1} step={0.05} value={aiIou} aria-label="IoU threshold" onChange={(e) => setAiIou(Math.max(0, Math.min(1, +e.target.value)))} />
+            </label>
+            <button className="ghost" disabled={!!busyAi || !!readOnly}>Find</button>
+          </form>
+        )}
         <div className="canvas-wrap">
           <canvas ref={canvasRef} data-testid="canvas" className={`tool-${mode}`} tabIndex={0} onWheel={onWheel}
             onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
@@ -2348,13 +2701,22 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
                     }}>
                     <input type="checkbox" checked={!s.hidden} aria-label={`Show ${s.label}`} onClick={(e) => e.stopPropagation()}
                       onChange={(e) => {
-                        const next = shapesRef.current.map((q, k) => (k === i ? { ...q, hidden: !e.target.checked || undefined } : q))
+                        const which = selectedRef.current.includes(i) ? selectedRef.current : [i]
+                        const next = shapesRef.current.map((q, k) => (which.includes(k) ? { ...q, hidden: !e.target.checked || undefined } : q))
+                        // Undone like any change; hidden shapes are never saved, so there's nothing to save
+                        undo.current.push(shapesRef.current)
+                        if (undo.current.length > config.canvas.num_backups) undo.current.shift()
+                        redo.current = []
                         shapesRef.current = next
                         setShapesState(next)
                         invalidate()
                       }} />
                     <i style={{ background: colorOf(s.label) }} />
-                    <span className="name">{s.label}{s.group_id !== null ? ` (${s.group_id})` : ''}</span>
+                    <span className="name">{s.label}{s.group_id !== null ? ` (${s.group_id})` : ''}
+                      {Object.entries(s.flags).some(([k, v]) => v && k !== 'ai' && k !== 'difficult') && (
+                        <span className="muted"> [{Object.entries(s.flags).filter(([k, v]) => v && k !== 'ai' && k !== 'difficult').map(([k]) => k).join(', ')}]</span>
+                      )}
+                    </span>
                     {s.locked && <Lock size={12} className="muted" aria-label="Locked" />}
                     {s.flags.difficult === true && <span className="tag difficult">difficult</span>}
                     {isAi(s) && <span className="tag">AI{scoreOf(s) !== undefined ? ` ${percent(scoreOf(s)!)}` : ''}</span>}
@@ -2408,6 +2770,22 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
             </div>
           </form>
         </div>
+      )}
+      {modelsOpen && models && (
+        <Models models={models} progress={download} onClose={() => setModelsOpen(false)} onLink={(url) => window.api.openLink(url)}
+          onDownload={async (name) => { await ensureModel(name) }}
+          onCancel={(name) => window.api.aiCancel(name)}
+          onRemove={async (name) => {
+            const m = models.find((x) => x.name === name)!
+            const ok = await window.api.ask(`Delete ${m.title}?`, 'Its files are removed from ~/.cache/osam, which labelme uses too. It can be downloaded again.', ['Delete', 'Cancel'])
+            if (ok !== 0) return
+            try {
+              await window.api.aiRemove(name)
+            } catch (e) {
+              onError(`${m.title} couldn't be deleted: ${plainError(e)}`)
+            }
+            setModels(await window.api.aiModels())
+          }} />
       )}
       {bcOpen && (
         <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && setBcOpen(false)}>

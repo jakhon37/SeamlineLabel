@@ -1,4 +1,4 @@
-import type { Config } from '../../shared/config'
+import type { AiOutput, Config } from '../../shared/config'
 import type { LabelFormat } from '../../shared/formats'
 import type { LabelDoc, Shape } from '../../shared/labelfile'
 import type { Summary } from '../../shared/labels'
@@ -43,11 +43,22 @@ export type SaveRequest = {
   from?: LabelFormat
 }
 export type Loaded = { file: string; format: LabelFormat | null; verified: boolean; doc: LabelDoc | null }
-export type ModelInfo = { name: string; title: string; size: number; downloaded: boolean }
-export type SegmentResult =
-  | { kind: 'polygon'; points: number[][] }
-  | { kind: 'mask'; box: number[][]; mask: string }
-  | { kind: 'none' }
+export type ModelInfo = {
+  name: string; title: string; textTitle?: string; size: number; downloaded: boolean; downloading: boolean
+  license: { name: string; url: string }
+  /** What it takes: clicks, a box, words */
+  points: boolean; box: boolean; text: boolean
+}
+/** A shape the AI proposes; a mask shape's pixels as labelme's base64 PNG */
+export type ProposedShape = { label?: string; shape_type: AiOutput; points: number[][]; mask?: string; description?: string; group_id?: number | null }
+export type DrawnShape = { shape_type: string; points: number[][]; label?: string; mask?: string | null }
+export type AssistRequest = {
+  root: string; name: string; model: string; points: number[][]; labels: number[]; output: AiOutput; detail: number
+  drawn: DrawnShape[] | null; groups: number[]; outside: boolean
+}
+export type TextRequest = Omit<AssistRequest, 'points' | 'labels' | 'drawn'> & { texts: string[]; drawn: DrawnShape[]; iou: number; score: number }
+/** New shapes, and the indexes of drawn shapes the AI found again; `notice` when nothing could be made */
+export type Proposal = { shapes: ProposedShape[]; matched: number[]; notice?: string }
 export type PrelabelModel = { path: string; name: string; classes: string[]; inputSize: number[]; tile: number }
 
 declare global {
@@ -80,8 +91,12 @@ declare global {
       onError(fn: (message: string) => void): () => void
       aiModels(): Promise<ModelInfo[]>
       aiDownload(name: string): Promise<void>
-      onAiDownload(fn: (p: { name: string; done: number; total: number }) => void): () => void
-      aiSegment(root: string, name: string, model: string, points: number[][], labels: number[], mode: 'polygon' | 'mask'): Promise<SegmentResult>
+      onAiDownload(fn: (p: { name: string; model: string; done: number; total: number }) => void): () => void
+      aiCancel(name: string): Promise<void>
+      aiRemove(name: string): Promise<void>
+      aiAssist(req: AssistRequest): Promise<Proposal>
+      aiText(req: TextRequest): Promise<Proposal>
+      mergeMasks(shapes: { points: number[][]; mask: string }[]): Promise<{ points: number[][]; mask: string }>
       prelabelPick(): Promise<PrelabelModel | null>
       prelabelInfo(path: string): Promise<PrelabelModel>
       prelabelRun(root: string, model: string, names: string[], classes: string[]): Promise<{ done: number; total: number; stopped: boolean; failed: string[]; error?: string }>

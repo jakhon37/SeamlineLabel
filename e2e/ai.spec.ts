@@ -73,32 +73,36 @@ test("a model's classes must match its outputs", async () => {
 })
 
 // Needs efficientsam:10m in SEAMTAG_MODELS, about 40 MB, so it's left out by default
-test('AI polygon and AI mask with SAM', async () => {
+test('AI points makes polygons and masks with SAM, and boxes in Pascal VOC', async () => {
   test.skip(!process.env.SEAMTAG_MODELS, 'set SEAMTAG_MODELS to a folder with efficientsam:10m')
   const dir = await project('sam', {})
   await discs(dir, 'd', [{ cx: 200, cy: 150, r: 70, color: '#e0a030' }])
   const { app, page, errors } = await launch(dir, ['--labels', 'disc'])
   await open(page, 'd.png')
   await page.getByRole('menuitem', { name: 'AI' }).click()
-  await page.getByRole('menuitem', { name: 'Model for AI polygon and mask' }).hover()
+  await page.getByRole('menuitem', { name: 'Model for AI points and box' }).hover()
   await page.getByRole('menuitemcheckbox', { name: 'EfficientSam (speed)' }).click()
-  await page.getByRole('toolbar').getByRole('button', { name: 'AI polygon', exact: true }).click()
+  await page.getByRole('toolbar').getByRole('button', { name: 'AI points', exact: true }).click()
   await click(page, 200, 150)
   await expect(page.locator('.loading.notice')).toHaveCount(0, { timeout: 60000 })
   await page.keyboard.press('Enter')
   await saved(page)
-  const [polygon] = shapesIn(dir, 'd')
-  expect(polygon.shape_type).toBe('polygon')
+  // labelme 7 traces every part of the mask: the disc, and any speck beside it, grouped
+  const polygons = shapesIn(dir, 'd')
+  expect(polygons.every((s: any) => s.shape_type === 'polygon')).toBe(true)
+  if (polygons.length > 1) expect(new Set(polygons.map((s: any) => s.group_id)).size).toBe(1)
+  const area = (s: any) => Math.abs(s.points.reduce((a: number, p: number[], k: number) => a + p[0] * s.points[(k + 1) % s.points.length][1] - s.points[(k + 1) % s.points.length][0] * p[1], 0)) / 2
+  const polygon = polygons.reduce((a: any, b: any) => (area(b) > area(a) ? b : a))
   const xs = polygon.points.map((p: number[]) => p[0])
   expect(Math.min(...xs)).toBeGreaterThan(120)
   expect(Math.max(...xs)).toBeLessThan(280)
-  await page.getByRole('toolbar').getByRole('button', { name: 'AI mask', exact: true }).click()
+  await page.getByLabel('AI output').selectOption('mask')
   await click(page, 200, 150)
   await expect(page.locator('.loading.notice')).toHaveCount(0, { timeout: 60000 })
   await page.keyboard.press('Enter')
   await saved(page)
-  const mask = shapesIn(dir, 'd')[1]
-  expect(mask.shape_type).toBe('mask')
+  const mask = shapesIn(dir, 'd').find((s: any) => s.shape_type === 'mask')
+  expect(mask).toBeTruthy()
   // labelme's layout: an inclusive box, and a one-channel PNG of 0s and 1s that size
   const png = Buffer.from(mask.mask, 'base64')
   expect((await sharp(png).metadata()).channels).toBe(1)
@@ -115,19 +119,22 @@ test('AI polygon and AI mask with SAM', async () => {
   }
   expect(on / all).toBeGreaterThan(0.95)
   expect(all).toBeGreaterThan(Math.PI * 65 * 65)
-  // In Pascal VOC, which keeps boxes, the AI polygon is saved as the box around the disc
+  // In Pascal VOC, which keeps boxes, AI points makes a box
   await page.getByLabel('Save format').selectOption('voc')
   await expect.poll(() => existsSync(path.join(dir, 'd.xml'))).toBe(true)
-  await page.getByRole('toolbar').getByRole('button', { name: 'AI polygon', exact: true }).click()
+  await expect(page.getByLabel('AI output')).toBeDisabled()
   await click(page, 200, 150)
   await expect(page.locator('.loading.notice')).toHaveCount(0, { timeout: 60000 })
   await page.keyboard.press('Enter')
-  await expect.poll(() => readFileSync(path.join(dir, 'd.xml'), 'utf8').match(/<object>/g)?.length).toBe(3)
-  const last = readFileSync(path.join(dir, 'd.xml'), 'utf8').split('<object>')[3]
+  const before = polygons.length + 1
+  await expect.poll(() => readFileSync(path.join(dir, 'd.xml'), 'utf8').match(/<object>/g)?.length).toBe(before + 1)
+  const last = readFileSync(path.join(dir, 'd.xml'), 'utf8').split('<object>')[before + 1]
   const [bx0, by0, bx1, by1] = ['xmin', 'ymin', 'xmax', 'ymax'].map((k) => Number(new RegExp(`<${k}>(\\d+)</${k}>`).exec(last)![1]))
-  expect(bx0).toBeGreaterThan(120)
-  expect(bx1).toBeLessThan(280)
-  expect(Math.abs((bx1 - bx0) - (by1 - by0))).toBeLessThan(12)
+  // labelme 7's rectangle is the box of the model's whole mask, specks included: it holds the disc
+  expect(bx0).toBeLessThan(135)
+  expect(bx1).toBeGreaterThan(265)
+  expect(by0).toBeLessThan(85)
+  expect(by1).toBeGreaterThan(215)
   await finish(app, errors)
 })
 

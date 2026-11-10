@@ -50,8 +50,11 @@ contextBridge.exposeInMainWorld('api', {
   aiModels: () => ipc.invoke('ai:models'),
   aiDownload: (name: string) => ipc.invoke('ai:download', name),
   onAiDownload: on('ai:download'),
-  aiSegment: (root: string, name: string, model: string, points: number[][], labels: number[], mode: string) =>
-    ipc.invoke('ai:segment', root, name, model, points, labels, mode),
+  aiCancel: (name: string) => ipc.invoke('ai:cancel', name),
+  aiRemove: (name: string) => ipc.invoke('ai:remove', name),
+  aiAssist: (req: unknown) => ipc.invoke('ai:assist', req),
+  aiText: (req: unknown) => ipc.invoke('ai:text', req),
+  mergeMasks: (shapes: unknown) => ipc.invoke('shapes:merge-masks', shapes),
   prelabelPick: () => ipc.invoke('prelabel:pick'),
   prelabelInfo: (path: string) => ipc.invoke('prelabel:info', path),
   prelabelRun: (root: string, model: string, names: string[], classes: string[]) =>

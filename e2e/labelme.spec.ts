@@ -208,7 +208,9 @@ test('keep previous annotation, and Ctrl+Shift+D to copy once', async () => {
   await expect(page.locator('.shape')).toHaveCount(0)
   expect(existsSync(path.join(dir, 'c.json'))).toBe(false)
   await page.keyboard.press('a')
-  await page.keyboard.press('ControlOrMeta+p')
+  // labelme 7 gave Keep Previous Annotation no key; it's in the Edit menu
+  await page.getByRole('menuitem', { name: 'Edit' }).click()
+  await page.getByRole('menuitemcheckbox', { name: 'Keep previous annotation' }).click()
   await page.keyboard.press('d')
   await expect(page.locator('.shape')).toHaveCount(1)
   await expect.poll(() => existsSync(path.join(dir, 'c.json')) && shapesIn(dir, 'c').length).toBe(1)
@@ -310,7 +312,7 @@ test('menus show labelme\'s commands and run them', async () => {
   const { app, page, errors } = await launch(dir)
   await open(page, 'm.png')
   await page.getByRole('menuitem', { name: 'Edit' }).click()
-  for (const item of ['Create polygons', 'Create circle', 'Create line strip', 'Edit label…', 'Merge polygons', 'Undo', 'Add points to edge…']) {
+  for (const item of ['Create polygons', 'Create circle', 'Create line strip', 'Edit label…', 'Merge shapes', 'Undo', 'Add points to edge…']) {
     await expect(page.getByRole('menu').getByText(item, { exact: true })).toBeVisible()
   }
   await page.keyboard.press('Escape')

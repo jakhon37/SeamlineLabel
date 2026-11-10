@@ -11,7 +11,7 @@ const DOCS = 'https://github.com/jakhon37/Seamtag#readme'
 const KEPT = 'seamtag:settings'
 
 // Settings made in the window that outlast it. Saving and the like start from the config each time, as in labelme.
-type Kept = Pick<Settings, 'fill' | 'fit' | 'aiModel' | 'prelabelModel' | 'docks' | 'dark' | 'displayLabels' | 'drawSquares' | 'advanced' | 'drawColor'>
+type Kept = Pick<Settings, 'fill' | 'fit' | 'aiModel' | 'aiOutput' | 'prelabelModel' | 'docks' | 'dark' | 'displayLabels' | 'drawSquares' | 'advanced' | 'drawColor'>
 function readKept(): Partial<Kept> {
   try {
     return JSON.parse(localStorage.getItem(KEPT) ?? '{}')
@@ -20,9 +20,9 @@ function readKept(): Partial<Kept> {
   }
 }
 
+// labelme's names for its AI models; its SAM can't run here (see src/main/ai.ts), so SAM2 stands in
 const AI_TITLES: Record<string, string> = {
   'EfficientSam (speed)': 'efficientsam:10m', 'EfficientSam (accuracy)': 'efficientsam:latest',
-  'Sam (speed)': 'sam:100m', 'Sam (balanced)': 'sam:300m', 'Sam (accuracy)': 'sam:latest',
   'Sam2 (speed)': 'sam2:small', 'Sam2 (balanced)': 'sam2:latest', 'Sam2 (accuracy)': 'sam2:large'
 }
 
@@ -30,7 +30,7 @@ function initialSettings(config: Config): Settings {
   const kept = readKept()
   return {
     autoSave: config.auto_save,
-    storeData: config.store_data,
+    storeData: config.with_image_data,
     keepPrev: config.keep_prev,
     keepPrevScale: config.keep_prev_scale,
     keepPrevBC: config.keep_prev_brightness_contrast,
@@ -38,6 +38,9 @@ function initialSettings(config: Config): Settings {
     fill: kept.fill ?? 0.3,
     fit: kept.fit ?? 'window',
     aiModel: kept.aiModel ?? AI_TITLES[config.ai.default] ?? 'sam2:latest',
+    aiOutput: kept.aiOutput ?? 'polygon',
+    // labelme's SAM 3 can't run here (see src/main/ai.ts): YOLO-World finds by words
+    aiTextModel: 'yoloworld:latest',
     prelabelModel: kept.prelabelModel ?? '',
     docks: {
       files: config.file_dock.show, labels: config.label_dock.show, shapes: config.shape_dock.show, flags: config.flag_dock.show,
@@ -45,7 +48,7 @@ function initialSettings(config: Config): Settings {
     },
     dark: kept.dark ?? config.dark_mode,
     format: config.label_format,
-    displayLabels: kept.displayLabels ?? false,
+    displayLabels: kept.displayLabels ?? config.shape.show_labels,
     drawSquares: kept.drawSquares ?? false,
     askLabel: config.display_label_popup,
     advanced: kept.advanced ?? true,
@@ -54,13 +57,13 @@ function initialSettings(config: Config): Settings {
 }
 
 const MENUS: MenuSpec = [
-  { label: 'File', items: ['open', 'open_dir', { label: 'Open recent', items: [], prefix: 'recent:' }, 'open_annotation', '-', 'open_next', 'open_prev', 'copy_previous_shapes', '-', 'save', 'save_as', { label: 'Save format', items: [], prefix: 'format:' }, 'auto_save', 'store_data', 'save_to', '-', 'delete_file', 'delete_image', 'reveal', 'close', '-', 'preferences', 'reset_settings', 'quit'] },
-  { label: 'Edit', items: ['create_polygon', 'create_rectangle', 'create_circle', 'create_line', 'create_point', 'create_linestrip', 'create_ai_polygon', 'create_ai_mask', 'create_brush', 'create_eraser', 'edit_polygon', 'draw_squares', 'box_line_color', '-', 'edit_label', 'duplicate_polygon', 'copy_polygon', 'paste_polygon', 'delete_polygon', 'merge_polygons', '-', 'undo', 'redo', 'remove_selected_point', 'add_multiple_points', 'toggle_lock', 'toggle_difficult', 'shape_line_color', 'shape_fill_color', '-', 'verify_image', 'toggle_keep_prev_mode'] },
-  { label: 'View', items: ['dock_flags', 'dock_labels', 'dock_shapes', 'dock_files', '-', 'fill_drawing', 'display_labels', 'toggle_all_polygons', 'hide_all_polygons', 'show_all_polygons', '-', 'single_class_mode', 'advanced_mode', '-', 'zoom_in', 'zoom_out', 'zoom_to_original', 'fit_window', 'fit_width', 'keep_prev_scale', '-', 'brightness_contrast', 'keep_prev_brightness_contrast', '-', 'dark_mode'] },
-  { label: 'AI', items: [{ label: 'Model for AI polygon and mask', items: [], prefix: 'ai_model:' }, '-', 'prelabel_pick', 'prelabel_one', 'prelabel_all', '-', 'review_accept', 'review_reject', 'review_skip', 'review_accept_all', 'order_certainty'] },
+  { label: 'File', items: ['open', 'open_dir', { label: 'Open recent', items: [], prefix: 'recent:' }, 'open_annotation', '-', 'open_next', 'open_prev', 'copy_previous_shapes', '-', 'save', 'save_as', { label: 'Save format', items: [], prefix: 'format:' }, 'auto_save', 'with_image_data', 'save_to', '-', 'delete_file', 'delete_image', 'reveal', 'close', '-', 'preferences', 'reset_settings', 'quit'] },
+  { label: 'Edit', items: ['create_polygon', 'create_rectangle', 'create_oriented_rectangle', 'create_circle', 'create_line', 'create_point', 'create_linestrip', 'create_ai_points', 'create_ai_box', 'create_brush', 'create_eraser', 'edit_shape', 'draw_squares', 'box_line_color', '-', 'edit_label', 'duplicate_shape', 'copy_shape', 'paste_shape', 'delete_shape', 'merge_shapes', '-', 'undo', 'redo', 'remove_selected_point', 'add_point_to_edge', 'add_multiple_points', 'toggle_lock', 'toggle_difficult', 'shape_line_color', 'shape_fill_color', '-', 'verify_image', 'toggle_keep_prev_mode', '-', { label: 'Select a neighbour', items: ['select_shape_up', 'select_shape_down', 'select_shape_left', 'select_shape_right'] }] },
+  { label: 'View', items: ['dock_flags', 'dock_labels', 'dock_shapes', 'dock_files', 'toggle_label_panel', '-', 'fill_drawing', 'display_labels', 'toggle_all_shapes', 'hide_all_shapes', 'show_all_shapes', '-', 'single_class_mode', 'advanced_mode', '-', 'zoom_in', 'zoom_out', 'zoom_to_original', 'fit_window', 'fit_selection', 'fit_width', 'keep_prev_scale', '-', 'brightness_contrast', 'keep_prev_brightness_contrast', '-', 'dark_mode'] },
+  { label: 'AI', items: ['create_ai_points', 'create_ai_box', { label: 'Model for AI points and box', items: [], prefix: 'ai_model:' }, { label: 'AI makes', items: [], prefix: 'ai_output:' }, { label: 'Model for the text prompt', items: [], prefix: 'ai_text_model:' }, 'ai_models', '-', 'prelabel_pick', 'prelabel_one', 'prelabel_all', '-', 'review_accept', 'review_reject', 'review_skip', 'review_accept_all', 'order_certainty'] },
   { label: 'Help', items: ['shortcuts', 'docs', 'about'] }
 ]
-const CONTEXT = ['edit_label', 'duplicate_polygon', 'copy_polygon', 'paste_polygon', 'delete_polygon', 'merge_polygons', 'toggle_difficult', 'shape_line_color', 'shape_fill_color', '-', 'undo', 'redo', '-', 'add_multiple_points', 'remove_selected_point', '-', 'edit_polygon', 'create_polygon', 'create_rectangle']
+const CONTEXT = ['edit_label', 'duplicate_shape', 'copy_shape', 'paste_shape', 'delete_shape', 'merge_shapes', 'toggle_lock', 'toggle_difficult', 'shape_line_color', 'shape_fill_color', '-', 'undo', 'redo', '-', 'add_point_to_edge', 'add_multiple_points', 'remove_selected_point', '-', 'edit_shape', 'create_polygon', 'create_rectangle']
 
 export default function App() {
   const [start, setStart] = useState<Start | null>(null)
@@ -81,9 +84,9 @@ export default function App() {
 
   useEffect(() => {
     if (!settings) return
-    const { fill, fit, aiModel, prelabelModel, docks, dark, displayLabels, drawSquares, advanced, drawColor } = settings
+    const { fill, fit, aiModel, aiOutput, prelabelModel, docks, dark, displayLabels, drawSquares, advanced, drawColor } = settings
     try {
-      localStorage.setItem(KEPT, JSON.stringify({ fill, fit, aiModel, prelabelModel, docks, dark, displayLabels, drawSquares, advanced, drawColor }))
+      localStorage.setItem(KEPT, JSON.stringify({ fill, fit, aiModel, aiOutput, prelabelModel, docks, dark, displayLabels, drawSquares, advanced, drawColor }))
     } catch {
       // Not kept, then
     }
@@ -152,6 +155,17 @@ export default function App() {
   const pickDir = async () => {
     const dir = await window.api.pickFolder('Open image folder')
     if (dir) open(dir)
+  }
+  const nextToImages = async () => {
+    if (!data?.outputDir) return
+    const current = data.images.find((i) => i.name === data.select)?.name
+    if (labeler.current && !(await labeler.current.canLeave())) return
+    try {
+      const next = await window.api.openProject(data.root, null)
+      setData({ ...next, select: current ?? next.select })
+    } catch (e) {
+      showError(plainError(e))
+    }
   }
   const changeOutput = async () => {
     if (!data) return
@@ -293,7 +307,7 @@ export default function App() {
         </div>
       ) : (
         <div className="page">
-          <Labeler key={`${data.root}\n${data.outputDir ?? ''}`} ref={labeler} data={data} config={config} settings={settings} setSettings={setSettings}
+          <Labeler key={`${data.root}\n${data.outputDir ?? ''}`} ref={labeler} data={data} config={config} settings={settings} setSettings={setSettings} onChangeOutput={changeOutput} onNextToImages={nextToImages}
             setProject={setProject} setImages={setImages} discovered={discovered} mac={mac} onError={showError}
             onOpenMenu={(x, y) => setContext({ x, y })} onChange={() => setTick((t) => t + 1)} />
         </div>

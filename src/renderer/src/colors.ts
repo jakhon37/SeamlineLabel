@@ -17,15 +17,16 @@ const hex = (rgb: number[]) => '#' + rgb.slice(0, 3).map((v) => Math.max(0, Math
 
 export function autoColor(index: number, config: Config) {
   // Index 0 is black: labelme skips it
-  return hex(LABEL_COLORMAP[(1 + index + config.shift_auto_shape_color) % LABEL_COLORMAP.length])
+  return hex(LABEL_COLORMAP[(1 + index + config.shape_color.auto.shift) % LABEL_COLORMAP.length])
 }
 
-/** labelme's _get_rgb_by_label, with a Seamline project's own colour before the automatic one */
+/** labelme's resolve_shape_color, with a Seamline project's own colour before the automatic one */
 export function labelColor(label: string, index: number, config: Config, projectColor?: string) {
-  if (config.shape_color === 'manual' && config.label_colors?.[label]) return hex(config.label_colors[label])
+  const { mode, uniform, by_label } = config.shape_color
+  if (mode === 'by_label' && by_label.colors?.[label]) return hex(by_label.colors[label])
   if (projectColor) return projectColor
-  if (config.shape_color === 'auto') return autoColor(index, config)
-  return hex(config.default_shape_color ?? [0, 255, 0])
+  if (mode === 'auto') return autoColor(index, config)
+  return hex(mode === 'uniform' ? uniform.color : by_label.fallback)
 }
 
 export function withAlpha(color: string, alpha: number) {

@@ -211,3 +211,82 @@ export function describe(s: Shape) {
     default: return s.shape_type
   }
 }
+
+// labelme 7's rotated box (its _shape/_oriented_rectangle.py and the canvas around it): four
+// corners kept square, reshaped from a corner with the opposite one fixed, turned by handles
+// at the middle of its edges
+
+const add = (a: Pt, b: Pt): Pt => [a[0] + b[0], a[1] + b[1]]
+const sub = (a: Pt, b: Pt): Pt => [a[0] - b[0], a[1] - b[1]]
+const isOutside = (p: Pt, w: number, h: number) => p[0] < 0 || p[1] < 0 || p[0] > w || p[1] > h
+
+/** The point on the line through `end`, square to the line from `start`, nearest to `p` */
+function ontoPerpendicular(p: Pt, start: Pt, end: Pt): Pt {
+  const dx = end[0] - start[0], dy = end[1] - start[1]
+  const lengthSq = dx * dx + dy * dy
+  if (lengthSq === 0) return [p[0], p[1]]
+  const t = ((p[0] - end[0]) * -dy + (p[1] - end[1]) * dx) / lengthSq
+  return [end[0] - t * dy, end[1] + t * dx]
+}
+
+function ontoLine(p: Pt, start: Pt, end: Pt): Pt {
+  const dx = end[0] - start[0], dy = end[1] - start[1]
+  const lengthSq = dx * dx + dy * dy
+  if (lengthSq === 0) return [p[0], p[1]]
+  const t = ((p[0] - start[0]) * dx + (p[1] - start[1]) * dy) / lengthSq
+  return [start[0] + t * dx, start[1] + t * dy]
+}
+
+function cornersAround(anchor: Pt, axis: Pt, moving: Pt): [Pt, Pt] {
+  const perp = ontoPerpendicular(moving, axis, anchor)
+  return [perp, sub(add(anchor, moving), perp)]
+}
+
+/**
+ * labelme's _reproject_oriented_rectangle_corners: corner `i` goes to `pos`, the corner across
+ * stays, and the two beside it follow so the shape stays a rectangle; kept on the image unless
+ * `size` is null.
+ */
+export function reprojectCorners(corners: Pt[], i: number, pos: Pt, size: [number, number] | null): Pt[] {
+  const anchor = corners[(i + 2) % 4]
+  let moving = pos
+  let [perp, para] = cornersAround(anchor, corners[(i + 3) % 4], moving)
+  if (size) {
+    const [w, h] = size
+    if (isOutside(moving, w, h)) {
+      const a = toEdge(perp, moving, w, h), b = toEdge(para, moving, w, h)
+      moving = a[0] === b[0] && a[1] === b[1] ? clampTo(w, h)(moving) : ontoLine(moving, a, b)
+      ;[perp, para] = cornersAround(anchor, para, moving)
+    }
+    if (isOutside(perp, w, h)) {
+      perp = toEdge(anchor, perp, w, h)
+      moving = sub(add(perp, para), anchor)
+    }
+    if (isOutside(para, w, h)) {
+      para = toEdge(anchor, para, w, h)
+      moving = sub(add(perp, para), anchor)
+    }
+  }
+  const out = corners.map((c) => [c[0], c[1]])
+  out[i] = moving
+  out[(i + 1) % 4] = perp
+  out[(i + 3) % 4] = para
+  return out
+}
+
+/** Handle i sits at the middle of the edge from corner i - 1 to corner i */
+export const rotationHandles = (points: Pt[]): Pt[] => points.map((p, i) => {
+  const q = points[(i + 3) % 4]
+  return [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2]
+})
+
+export const boxCenter = (points: Pt[]): Pt => [(points[0][0] + points[2][0]) / 2, (points[0][1] + points[2][1]) / 2]
+
+export function rotatePoints(points: Pt[], center: Pt, angle: number): Pt[] {
+  const c = Math.cos(angle), s = Math.sin(angle)
+  return points.map(([x, y]) => {
+    const dx = x - center[0], dy = y - center[1]
+    return [dx * c - dy * s + center[0], dx * s + dy * c + center[1]]
+  })
+}
+
