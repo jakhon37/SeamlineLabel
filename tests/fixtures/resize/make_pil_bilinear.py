@@ -10,9 +10,10 @@ import PIL
 import PIL.Image
 
 here = Path(__file__).parent
-# Up, down, one side only, both pass orders Pillow picks between, and SAM2's 1024 x 1024
+# Up, down, one side only, both pass orders Pillow picks between, and SAM2's 1024 x 1024. The
+# last three are where Pillow 13's rule for the order differs from going by cost.
 SIZES = [(64, 50), (11, 9), (37, 61), (100, 7), (5, 23), (11, 50), (200, 3), (3, 200), (60, 5),
-         (20, 40), (40, 20), (1024, 1024), (36, 24), (38, 22)]
+         (20, 40), (40, 20), (1024, 1024), (36, 24), (38, 22), (40, 24), (47, 29), (4, 2)]
 
 image = np.random.default_rng(7).integers(0, 256, size=(23, 37, 3), dtype=np.uint8)
 hashes = {}

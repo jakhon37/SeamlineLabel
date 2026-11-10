@@ -71,16 +71,16 @@ function vertical(src: Uint8Array, w: number, h: number, outHeight: number, chan
   return out
 }
 
-const taps = (inSize: number, outSize: number) => Math.ceil(Math.max(inSize / outSize, 1)) * 2 + 1
-
 /** Interleaved 8-bit pixels with `channels` per pixel, resized as PIL's Image.resize(BILINEAR) */
 export function pilResize(data: Uint8Array, width: number, height: number, outWidth: number, outHeight: number, channels = 3): Uint8Array {
   if (outWidth === width && outHeight === height) return data
   if (outHeight === height) return horizontal(data, width, height, outWidth, channels)
   if (outWidth === width) return vertical(data, width, height, outHeight, channels)
-  // Pillow does the cheaper pass order, which changes how the two roundings fall
-  const hFirst = outWidth * height * taps(width, outWidth) + outWidth * outHeight * taps(height, outHeight)
-  const vFirst = width * outHeight * taps(height, outHeight) + outWidth * outHeight * taps(width, outWidth)
-  if (hFirst <= vFirst) return vertical(horizontal(data, width, height, outWidth, channels), outWidth, height, outHeight, channels)
+  // Pillow 13 runs the vertical pass first when the height shrinks more than twice as much as
+  // the width (Pillow 12 and before always ran the horizontal one first). The order changes how
+  // the two roundings fall.
+  const horizontalFirst = !(height - outHeight > 0 && height - outHeight > (width - outWidth) * 2)
+  if (horizontalFirst) return vertical(horizontal(data, width, height, outWidth, channels), outWidth, height, outHeight, channels)
   return horizontal(vertical(data, width, height, outHeight, channels), width, outHeight, outWidth, channels)
 }
+
