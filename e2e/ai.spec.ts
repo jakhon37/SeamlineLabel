@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import path from 'path'
 import sharp from 'sharp'
-import { click, doc, finish, launch, open, project, saved, shapesIn, square, W, H } from './helpers'
+import { click, doc, finish, launch, onImage, open, project, saved, shapesIn, square, W, H } from './helpers'
 
 const MODEL = path.resolve(__dirname, '../tests/fixtures/models/discs.onnx')
 
@@ -128,5 +128,37 @@ test('AI polygon and AI mask with SAM', async () => {
   expect(bx0).toBeGreaterThan(120)
   expect(bx1).toBeLessThan(280)
   expect(Math.abs((bx1 - bx0) - (by1 - by0))).toBeLessThan(12)
+  await finish(app, errors)
+})
+
+// Asked while the button was still down, the question kept the window's hold on the pointer on X11
+test('the download question waits for the mouse button to come up', async () => {
+  const dir = await project('ai-ask', {})
+  await discs(dir, 'd', [{ cx: 200, cy: 150, r: 70, color: '#e0a030' }])
+  // With no model downloaded, the first click asks to download one
+  const models = process.env.SEAMTAG_MODELS
+  delete process.env.SEAMTAG_MODELS
+  const { app, page, errors } = await launch(dir, ['--labels', 'disc']).finally(() => {
+    if (models !== undefined) process.env.SEAMTAG_MODELS = models
+  })
+  await app.evaluate(({ dialog }) => {
+    const asked: string[] = (globalThis as any).asked = []
+    dialog.showMessageBox = (async (_win: unknown, o: { message: string }) => {
+      asked.push(o.message)
+      return { response: 1, checkboxChecked: false }
+    }) as any
+  })
+  const asked = () => app.evaluate(() => (globalThis as any).asked as string[])
+  await open(page, 'd.png')
+  await page.getByRole('toolbar').getByRole('button', { name: 'AI polygon', exact: true }).click()
+  await page.mouse.move(...(await onImage(page, 200, 150)))
+  await page.mouse.down()
+  await page.waitForTimeout(500)
+  expect(await asked()).toEqual([])
+  await page.mouse.up()
+  await expect.poll(asked).toEqual([expect.stringMatching(/^Download .+\?$/)])
+  // Cancelled, so nothing is drawn or saved
+  await expect(page.locator('.shape')).toHaveCount(0)
+  expect(existsSync(path.join(dir, 'd.json'))).toBe(false)
   await finish(app, errors)
 })
