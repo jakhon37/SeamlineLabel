@@ -97,6 +97,8 @@ type Draft = { points: Pt[]; labels: number[]; preview: Shape[]; matched: Shape[
 type Hover = { shape: number; vertex: number; edge: number; rotate?: number } | null
 
 const HISTORY_IMAGES = 30
+// A page can't read the system's double-click time: this is the longest common default
+const DOUBLE_CLICK_MS = 500
 const CACHE_TILES = 400
 const DRAG_START = 4
 
@@ -256,8 +258,9 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   const ghost = useRef<{ shapes: number[]; dx: number; dy: number } | null>(null)
   // Where the context menu was opened, for Add Point to Edge
   const menuPoint = useRef<Pt | null>(null)
-  // A Fit to Selection put off until the mouse button is up
+  // A Fit to Selection put off until the mouse button is up and a double-click's time has passed
   const pendingFit = useRef(false)
+  const fitTimer = useRef<ReturnType<typeof setTimeout>>()
 
   // The label list: config labels, then a Seamline project's classes, then labels found in the files
   const classes = useMemo(() => {
@@ -985,14 +988,16 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     setImages((all) => all.map((i) => (i.name === name ? { ...i, ...summarize(found, true) } : i)))
   }), [invalidate, root, setImages])
   useEffect(() => window.api.onAiDownload((p) => setDownload(p.done >= p.total ? null : p)), [])
-  // Fit to Selection follows the selection, once the mouse button is up: a press that selects a
-  // shape may become a drag of it, measured in the view it started in
+  // Fit to Selection follows the selection, as labelme 7 does: once the mouse button is up and a
+  // double-click's time has passed, since a press that selects a shape may become a drag of it, or
+  // the first click of a double-click, each measured in the view it started in
   useEffect(() => {
     if (settings.fit !== 'selection') return
-    if (drag.current) pendingFit.current = true
+    if (drag.current || fitTimer.current) pendingFit.current = true
     else fitSelection()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, settings.fit])
+  useEffect(() => () => clearTimeout(fitTimer.current), [])
   useEffect(() => {
     window.api.aiModels().then(setModels).catch(() => setModels(null))
   }, [])
@@ -1500,10 +1505,15 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
 
   const onPointerUp = (e: React.PointerEvent) => {
     releasePointer(e)
-    if (pendingFit.current) {
+    if (!pendingFit.current) return
+    clearTimeout(fitTimer.current)
+    fitTimer.current = setTimeout(() => {
+      fitTimer.current = undefined
+      // Pressed again meanwhile: that release starts the wait over
+      if (drag.current || !pendingFit.current) return
       pendingFit.current = false
       if (settingsRef.current.fit === 'selection') fitSelection()
-    }
+    }, DOUBLE_CLICK_MS)
   }
   const releasePointer = (e: React.PointerEvent) => {
     const d = drag.current

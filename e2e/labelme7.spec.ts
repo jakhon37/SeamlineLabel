@@ -132,6 +132,23 @@ test('with Fit to Selection on, a shape pressed and dragged moves by the drag, a
   await finish(app, errors)
 })
 
+test("with Fit to Selection on, a double-click on a shape edits that shape's label: the view waits for the second click", async () => {
+  const dir = await project('fit-dblclick', { g: doc('g', [square('a', 40, 40, 100, 100), square('b', 220, 120, 300, 200)]) })
+  const { app, page, errors } = await launch(dir)
+  await open(page, 'g.png')
+  await page.keyboard.press('v')
+  await page.keyboard.press('ControlOrMeta+Shift+f')
+  // Two clicks a person's pace apart, near a's corner: a zoom onto a between them would put the second outside it
+  const at = await onImage(page, 45, 45)
+  await page.mouse.click(...at)
+  await page.waitForTimeout(150)
+  await page.mouse.click(...at, { clickCount: 2 })
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await expect(page.getByRole('dialog').getByLabel('Label', { exact: true })).toHaveValue('a')
+  await page.keyboard.press('Escape')
+  await finish(app, errors)
+})
+
 test("Add Point to Edge from the shape's menu; hiding shapes is undone like any change, for the whole selection", async () => {
   const dir = await project('edge', { e: doc('e', [square('cat', 50, 50, 150, 150), square('dog', 200, 50, 300, 150)]) })
   const { app, page, errors } = await launch(dir)
