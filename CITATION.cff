@@ -1,6 +1,6 @@
 cff-version: 1.2.0
-message: "If you use this software, please cite it, and labelme, as below."
-title: "Seamtag: image annotation in LabelMe format"
+message: "If you use this software, please cite it, and labelme and LabelImg, as below."
+title: "Seamtag: image annotation in LabelMe, Pascal VOC, YOLO and CreateML formats"
 authors:
 - family-names: "Nodirov"
   given-names: "Jakhongir"
@@ -16,3 +16,9 @@ references:
     orcid: "https://orcid.org/0000-0002-6347-5156"
   doi: 10.5281/zenodo.5711226
   url: "https://github.com/wkentaro/labelme"
+- type: software
+  title: "LabelImg"
+  authors:
+  - alias: "Tzutalin"
+  year: 2015
+  url: "https://github.com/HumanSignal/labelImg"
