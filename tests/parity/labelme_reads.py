@@ -5,6 +5,7 @@
 Works with labelme 5 and 7. Fails if labelme can't load a file, or a shape covers no pixels.
 """
 import importlib.metadata
+import importlib.util
 import io
 import os.path as osp
 import sys
@@ -16,8 +17,29 @@ import PIL.Image
 LABELME = importlib.metadata.version("labelme")
 
 
+def labelme_utils():
+    """labelme_utils.py beside this script, found by its path, as python -I leaves this folder out"""
+    spec = importlib.util.spec_from_file_location("labelme_utils", osp.join(osp.dirname(osp.abspath(__file__)), "labelme_utils.py"))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def load(filename):
     # By version, so an import that fails for want of a system library says so
+    if tuple(int(n) for n in LABELME.split(".")[:2]) >= (7, 10):
+        # labelme 7.10 keeps the reader and rasteriser its export scripts use in examples/utils.py, not in
+        # the package, and asks you to copy that file, as labelme_utils.py is. labelme's own loader must
+        # still take the file.
+        from labelme._label_file import read_label_file
+
+        read_label_file(filename=filename)
+        utils = labelme_utils()
+        annotation = utils.load_label_file(filename)
+        return annotation.shapes, annotation.image_data, lambda shape, shapes, names: utils.shapes_to_label(
+            img_shape=shape, shapes=shapes, label_name_to_value=names
+        )
     if int(LABELME.split(".")[0]) >= 7:
         from labelme._label_file import read_label_file
         from labelme._utils._mask import shapes_to_label

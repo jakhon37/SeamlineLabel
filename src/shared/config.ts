@@ -106,8 +106,8 @@ export const DEFAULT_CONFIG = {
   // The brush and eraser, in screen pixels
   brush: { size: 28, min: 4, max: 200 },
 
-  // Pre-labelling with a segmentation model: smaller blobs are dropped
-  prelabel: { min_area: 20 },
+  // Pre-labelling with a segmentation model: smaller blobs are dropped, as in Seamline
+  prelabel: { min_area: 25 },
 
   // Where new labels are saved: LabelMe JSON, or LabelImg's Pascal VOC, YOLO or CreateML.
   // An image that has a label file keeps that file's format, as in LabelImg.

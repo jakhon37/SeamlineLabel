@@ -21,8 +21,8 @@ On Linux the end-to-end tests run without a window (`--ozone-platform=headless`)
 | `src/shared/formats.ts` | LabelImg's formats: Pascal VOC, YOLO and CreateML, as LabelImg writes them |
 | `src/shared/config.ts`, `src/main/config.ts` | labelme's config keys, the command line, shortcuts |
 | `src/main/project.ts`, `images.ts` | Folders, label files and the save queue; images and tile pyramids |
-| `src/main/ai.ts`, `masks.ts`, `resize.ts` | SAM models through onnxruntime, masks to shapes, Pillow's resize |
-| `src/main/prelabel.ts` | Pre-labelling with an ONNX segmentation model |
+| `src/main/ai.ts`, `masks.ts`, `resize.ts` | SAM models through onnxruntime, masks to shapes, Pillow's resize and OpenCV's |
+| `src/main/prelabel.ts`, `outline.ts`, `outliner.ts`, `runs.ts` | Pre-labelling with an ONNX segmentation model, its polygons outlined in a worker thread; the models Seamline exported from a folder's runs |
 | `src/renderer/src/Labeler.tsx` | The canvas and everything on it |
 | `src/renderer/src/shapes.ts`, `geometry.ts` | Shape geometry; brush and eraser |
 | `tests/unit`, `e2e`, `tests/parity` | Unit tests, end-to-end tests, labelme and LabelImg reading this app's files |

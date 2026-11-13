@@ -2,11 +2,11 @@ import { createHash } from 'crypto'
 import { existsSync, promises as fs } from 'fs'
 import path from 'path'
 import {
-  FORMAT_EXT, FORMAT_NAMES, type LabelFormat, looksLikeCreateML, readClasses, readCreateML, readVoc, readYolo, removeCreateML, writeClasses,
+  addClasses, FORMAT_EXT, FORMAT_NAMES, type LabelFormat, looksLikeCreateML, readClasses, readCreateML, readVoc, readYolo, removeCreateML, writeClasses,
   writeCreateML, writeVoc, writeYolo, YOLO_CLASSES
 } from '../shared/formats'
-import { FORMAT_VERSION, type LabelDoc, LabelFileError, parseLabelFile, serializeLabelFile, type Shape } from '../shared/labelfile'
-import { EMPTY_SUMMARY, type Summary, summarize } from '../shared/labels'
+import { FORMAT_VERSION, isAi, type LabelDoc, LabelFileError, parseLabelFile, serializeLabelFile, type Shape } from '../shared/labelfile'
+import { EMPTY_SUMMARY, hasArea, type Summary, summarize } from '../shared/labels'
 
 // What Chromium or libvips can show. labelme takes whatever Qt can read, which is much the same.
 export const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.jfif', '.png', '.bmp', '.gif', '.tif', '.tiff', '.webp', '.avif'])
@@ -31,12 +31,23 @@ export type OpenProject = {
   images: ImageItem[]
   /** The image to show first, when a file was opened rather than a folder */
   select: string | null
+  /**
+   * What Open recent and the last folder keep: what was opened, or the Seamline project a start on an
+   * image in its subfolder opened, which is kept with that image
+   */
+  remembered: string
 }
 
 type Root = {
   dir: string; outputDir: string | null; outputFile: string | null; images: Map<string, ImageItem>; embedded: Map<string, string>
   /** File names, without extensions, that more than one image has, in different folders */
   shared: Set<string>
+  /** The image whose labels the window opened last, to edit */
+  editing: string | null
+  /** Each image's label files as they were when the window was last told of them, so a refresh tells only changes */
+  sent: Map<string, string>
+  /** The classes in .myseg/project.json as Seamtag last read or wrote them, so a save keeps another app's changes since */
+  classes: LabelClass[]
 }
 const roots = new Map<string, Root>()
 
@@ -210,6 +221,9 @@ export function rootsOpen() {
   return [...roots.keys()]
 }
 
+// One collator for the whole sort: localeCompare with options makes one for every comparison
+const byName = new Intl.Collator(undefined, { numeric: true }).compare
+
 async function scan(dir: string): Promise<string[]> {
   const found: string[] = []
   const walk = async (sub: string) => {
@@ -228,7 +242,7 @@ async function scan(dir: string): Promise<string[]> {
     }
   }
   await walk('')
-  return found.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+  return found.sort(byName)
 }
 
 export async function readText(file: string): Promise<string | null> {
@@ -258,34 +272,193 @@ export async function writeAtomic(file: string, text: string) {
   }
 }
 
-async function readProjectFile(dir: string): Promise<ProjectInfo | null> {
-  const text = await readText(meta(dir, 'project.json')).catch(() => null)
-  if (!text) return null
-  try {
-    const p = JSON.parse(text)
-    if (!Array.isArray(p.classes)) return null
-    return {
-      name: typeof p.name === 'string' ? p.name : path.basename(dir),
-      classes: p.classes.filter((c: any) => typeof c?.name === 'string').map((c: any) => ({
-        name: c.name, color: typeof c.color === 'string' ? c.color : ''
-      }))
-    }
-  } catch {
-    return null
+// Seamline, or any other app, may change label files while the folder is open here. The window
+// holds an image's labels as it read them, so the image's label files are remembered as they were
+// then, by what they hold, and again each time Seamtag writes one. A file that has changed since is
+// never written over or trashed: the window reads it again instead.
+const held = new Map<string, Map<string, string>>()
+const heldKey = (dir: string, name: string) => `${dir}\0${name}`
+
+/** Another app changed the image's labels since Seamtag last read or wrote them, so nothing was written */
+export class LabelsChanged extends Error {
+  constructor(readonly name: string) {
+    super(`The labels of ${name} changed in another app since Seamtag read them, so they're left unchanged`)
   }
 }
 
-export async function saveProjectFile(dir: string, project: ProjectInfo) {
-  getRoot(dir)
-  // Keeps keys Seamline writes there, such as its training settings
-  const text = await readText(meta(dir, 'project.json')).catch(() => null)
-  let doc: Record<string, unknown> = {}
-  try {
-    if (text) doc = JSON.parse(text)
-  } catch {
-    // Unreadable: replaced
+async function stampOf(file: string, format: LabelFormat) {
+  // A .txt with no classes.txt beside it isn't YOLO's, so it's no label file
+  if (format === 'yolo' && !isYolo(file)) return 'none'
+  // What it holds, not its size and time: a coarse file clock, such as Windows' 16 ms tick or
+  // FAT's 2 s, gives two saves of the same size within one tick the same time
+  const bytes = await fs.readFile(file).catch(() => null)
+  return bytes ? sha1(bytes) : 'none'
+}
+const sha1 = (bytes: Buffer) => createHash('sha1').update(bytes).digest('hex')
+
+/** The image's label files in every format: the ones it has, and where it would get them */
+function labelFiles(dir: string, name: string) {
+  const files = new Map<string, LabelFormat>()
+  for (const format of ['labelme', 'voc', 'yolo'] as const) {
+    const file = labelPath(dir, name, format)
+    if (!files.has(file)) files.set(file, format)
   }
-  await writeAtomic(meta(dir, 'project.json'), JSON.stringify({ ...doc, ...project }, null, 2))
+  return files
+}
+
+async function stampsOf(dir: string, name: string) {
+  const stamps = new Map<string, string>()
+  for (const [file, format] of labelFiles(dir, name)) stamps.set(file, await stampOf(file, format))
+  return stamps
+}
+
+/** Has another app changed the image's labels since Seamtag last read or wrote them? Not if Seamtag never has. */
+export async function changedSince(dir: string, name: string) {
+  const before = held.get(heldKey(dir, name))
+  if (!before) return false
+  for (const [file, stamp] of await stampsOf(dir, name)) {
+    if ((before.get(file) ?? 'none') !== stamp) return true
+  }
+  return false
+}
+
+export const labelsChanged = (dir: string, name: string) => serial(() => changedSince(dir, name))
+
+/** Seamtag has just written or trashed one of the image's label files */
+export async function wrote(dir: string, name: string, file: string, format: LabelFormat) {
+  const record = held.get(heldKey(dir, name))
+  const before = record?.get(file)
+  const stamp = await stampOf(file, format)
+  // Other images whose labels share the file, as in one CreateML list, follow if they were as it was
+  if (before !== undefined) {
+    for (const [key, files] of held) if (key.startsWith(`${dir}\0`) && files.get(file) === before) files.set(file, stamp)
+  }
+  record?.set(file, stamp)
+  return stamp
+}
+
+// An empty label file says someone cleared the image, so Seamtag and Seamline leave it out of
+// pre-labelling. An automatic save with nothing to keep therefore writes no file for an image that
+// has none, and removes the one these saves made for it while it holds what they wrote, as when a
+// shape drawn is undone. Saved by hand, the empty file is written, as in labelme, and stays.
+const made = new Map<string, { file: string; stamp: string }>()
+
+export function editing(dir: string) {
+  return getRoot(dir).editing
+}
+
+/** .myseg/project.json: its keys, or null when it's missing or unreadable, and its classes when it lists them */
+async function readProjectDoc(dir: string) {
+  const text = await readText(meta(dir, 'project.json')).catch(() => null)
+  let doc: Record<string, unknown> | null = null
+  try {
+    const parsed = text ? JSON.parse(text) : null
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) doc = parsed
+  } catch {
+    // Unreadable: as if there were none
+  }
+  const list = doc?.classes
+  const classes: LabelClass[] | null = Array.isArray(list)
+    ? list.filter((c) => typeof c?.name === 'string').map((c) => ({ name: c.name, color: typeof c.color === 'string' ? c.color : '' }))
+    : null
+  return { doc, classes }
+}
+
+async function readProjectFile(dir: string): Promise<ProjectInfo | null> {
+  const { doc, classes } = await readProjectDoc(dir)
+  if (!doc || !classes) return null
+  return { name: typeof doc.name === 'string' ? doc.name : path.basename(dir), classes }
+}
+
+/**
+ * Seamtag's class list (ours), with the changes another app, such as Seamline, made to the file
+ * (theirs) since Seamtag last read or wrote it (base): ours in its order, then the classes the other
+ * app added. A class ours left as it was takes the other app's colour, and goes if the other app
+ * deleted it. With no file to read, theirs is null, and ours is written as it is.
+ */
+export function mergeClasses(base: LabelClass[], ours: LabelClass[], theirs: LabelClass[] | null): LabelClass[] {
+  if (!theirs) return ours
+  const before = new Map(base.map((c) => [c.name, c.color]))
+  const now = new Map(theirs.map((c) => [c.name, c.color]))
+  const merged: LabelClass[] = []
+  for (const c of ours) {
+    if (before.get(c.name) !== c.color) merged.push(c)
+    else if (now.has(c.name)) merged.push({ name: c.name, color: now.get(c.name)! })
+  }
+  const named = new Set(ours.map((c) => c.name))
+  for (const c of theirs) {
+    if (before.has(c.name) || named.has(c.name)) continue
+    named.add(c.name)
+    merged.push(c)
+  }
+  return merged
+}
+
+/**
+ * The labels of the folder's shapes that have an area, AI proposals aside, in order: the class list
+ * Seamline starts a folder with when it has none, as these are the shapes it trains on
+ */
+async function labelsWithArea(dir: string) {
+  const names = [...getRoot(dir).images.keys()]
+  const labels = new Set<string>()
+  let next = 0
+  await Promise.all(Array.from({ length: 8 }, async () => {
+    while (next < names.length) {
+      const name = names[next++]
+      const found = await findLabels(dir, name).catch(() => null)
+      const read = found && await readLabels(dir, name, found, anySize).catch(() => null)
+      for (const s of read?.doc.shapes ?? []) if (s.label && !isAi(s) && hasArea(s)) labels.add(s.label)
+    }
+  }))
+  return [...labels].sort()
+}
+
+/**
+ * Writes Seamtag's class list, merged with the file as it is now, and gives back what was written. A
+ * folder with no class list yet gets the one Seamline would start it with, in the colours Seamtag's
+ * label list `shown` gives those labels, with Seamtag's change: else Seamline, finding a list, would
+ * never start its own, and would train on the one label changed here.
+ */
+export async function saveProjectFile(dir: string, project: ProjectInfo, shown: LabelClass[] = []): Promise<ProjectInfo> {
+  const r = getRoot(dir)
+  // Before the save's turn, as it reads every label file
+  const first = (await readProjectDoc(dir)).classes ? null : await labelsWithArea(dir)
+  return serial(async () => {
+    // Keeps keys Seamline writes there, such as its training settings, and its changes to the classes
+    const { doc, classes: theirs } = await readProjectDoc(dir)
+    let ours = project.classes
+    if (!theirs && first) {
+      // A label added here goes after Seamline's, and a label given a colour here keeps its place
+      const start = first.map((name) => ours.find((c) => c.name === name) ?? { name, color: shown.find((c) => c.name === name)?.color ?? '' })
+      ours = [...start, ...ours.filter((c) => !first.includes(c.name))]
+    }
+    const classes = mergeClasses(r.classes, ours, theirs)
+    const out = { name: project.name, ...doc, classes }
+    await writeAtomic(meta(dir, 'project.json'), JSON.stringify(out, null, 2))
+    r.classes = classes
+    return { name: typeof out.name === 'string' ? out.name : project.name, classes }
+  })
+}
+
+/** .myseg/project.json as it is now, which another app, such as Seamline, may have changed: null when there's none */
+export async function reloadProjectFile(dir: string) {
+  const r = getRoot(dir)
+  return serial(async () => {
+    const file = await readProjectFile(dir)
+    r.classes = file?.classes ?? []
+    return file
+  })
+}
+
+function sharedStems(names: string[]) {
+  const seen = new Set<string>()
+  const shared = new Set<string>()
+  for (const name of names) {
+    const base = stemOf(path.basename(name))
+    if (seen.has(base)) shared.add(base)
+    seen.add(base)
+  }
+  return shared
 }
 
 /** A label file opened on its own: its image, or the image inside it */
@@ -298,12 +471,26 @@ async function imageOfLabelFile(file: string) {
   throw new Error(`The image of ${path.basename(file)} can't be found: ${image || 'it names none'}`)
 }
 
-export async function openProject(target: string, output: string | null): Promise<OpenProject> {
+/** The folder Seamline's project.json makes a project of: the nearest from `dir` up that has one, or null */
+async function projectAbove(dir: string) {
+  for (let at = dir; ; at = path.dirname(at)) {
+    if (await fs.stat(meta(at, 'project.json')).then((s) => s.isFile(), () => false)) return at
+    if (path.dirname(at) === at) return null
+  }
+}
+
+/**
+ * `started`: Seamtag was started on the target, as Seamline's Label in Seamtag starts it. An image in a
+ * subfolder of a Seamline project then opens the whole project, on that image, as Seamline lists it.
+ */
+export async function openProject(target: string, output: string | null, started = false): Promise<OpenProject> {
   const full = path.resolve(target)
   const stat = await fs.stat(full)
   let dir = full
   let select: string | null = null
   let embeddedFile: string | null = null
+  let names: string[] | null = null
+  let remembered = target
   if (!stat.isDirectory()) {
     dir = path.dirname(full)
     if (path.extname(full).toLowerCase() === '.json') {
@@ -317,44 +504,103 @@ export async function openProject(target: string, output: string | null): Promis
       }
     } else {
       select = path.basename(full)
+      const top = started ? await projectAbove(dir) : null
+      if (top && top !== dir) {
+        // Unless the project doesn't list it: in a hidden folder, or under a link to a folder
+        const listed = await scan(top)
+        const name = posix(path.relative(top, full))
+        if (listed.includes(name)) {
+          dir = top
+          select = name
+          names = listed
+          remembered = top
+        }
+      }
     }
   }
   const outputFile = output && output.toLowerCase().endsWith('.json') ? path.resolve(output) : null
   const outputDir = output && !outputFile ? path.resolve(output) : null
-  const names = await scan(dir)
-  const r: Root = { dir, outputDir, outputFile, images: new Map(), embedded: new Map(), shared: new Set() }
+  names ??= await scan(dir)
+  const r: Root = { dir, outputDir, outputFile, images: new Map(), embedded: new Map(), shared: new Set(), editing: null, sent: new Map(), classes: [] }
   if (embeddedFile) {
     const name = posix(path.relative(dir, embeddedFile))
     r.embedded.set(name, embeddedFile)
     names.push(name)
     select = name
   }
-  const seen = new Set<string>()
-  for (const name of names) {
-    const base = stemOf(path.basename(name))
-    if (seen.has(base)) r.shared.add(base)
-    seen.add(base)
-  }
+  r.shared = sharedStems(names)
   roots.set(dir, r)
-  const images: ImageItem[] = names.map((name) => {
-    const labelled = hasLabels(dir, name)
-    const item: ImageItem = { ...EMPTY_SUMMARY, name, labelled, embedded: r.embedded.has(name) || undefined }
-    r.images.set(name, item)
-    return item
-  })
+  // Which images have labels, by their folders' listings: asked file by file, a big folder on a network
+  // share keeps the main process from answering for as long as all those questions take
+  const exists = listings()
+  const images: ImageItem[] = await Promise.all(names.map(async (name) => {
+    const txt = labelPath(dir, name, 'yolo')
+    const labelled = (await exists(labelPath(dir, name))) || (await exists(labelPath(dir, name, 'voc')))
+      || (path.basename(txt) !== YOLO_CLASSES && (await exists(txt)) && (await exists(yoloClasses(txt))))
+    return { ...EMPTY_SUMMARY, name, labelled, embedded: r.embedded.has(name) || undefined }
+  }))
+  for (const item of images) r.images.set(item.name, item)
   const file = await readProjectFile(dir)
+  r.classes = file?.classes ?? []
   return {
     root: dir,
     outputDir: outputDir ?? (outputFile ? path.dirname(outputFile) : null),
     project: file ?? { name: path.basename(dir), classes: [] },
     hasProjectFile: !!file,
     images,
-    select
+    select,
+    remembered
   }
 }
 
 export function closeProject(dir: string) {
   roots.delete(dir)
+  for (const key of held.keys()) if (key.startsWith(`${dir}\0`)) held.delete(key)
+  for (const key of made.keys()) if (key.startsWith(`${dir}\0`)) made.delete(key)
+}
+
+/**
+ * A path Seamtag was started with again, as an image of a folder open here, perhaps one added since
+ * the folder was read: its folder, and its name, or null for the folder itself
+ */
+export function openHere(target: string) {
+  for (const r of roots.values()) {
+    if (target === r.dir) return { root: r.dir, name: null }
+    const name = posix(path.relative(r.dir, target))
+    const inside = !name.startsWith('../') && !path.isAbsolute(name) && !name.split('/').some((part) => part.startsWith('.'))
+    if (r.images.has(name) || (inside && IMAGE_EXTS.has(path.extname(name).toLowerCase()) && existsSync(target))) return { root: r.dir, name }
+  }
+  return null
+}
+
+/**
+ * The folder as it is now, since another app, such as Seamline, may have added or removed images
+ * while it was open: every image's name, in order, and the items of the new ones
+ */
+export async function refreshProject(dir: string) {
+  const r = getRoot(dir)
+  const scanned = [...await scan(dir), ...r.embedded.keys()]
+  // In the save queue's turn, so no save sees label paths change halfway through
+  return serial(async () => {
+    if (roots.get(dir) !== r) throw new Error('That folder is not open')
+    // An image trashed here since the scan is gone
+    const names = scanned.filter((name) => r.images.has(name) || existsSync(imagePath(dir, name)))
+    const now = new Set(names)
+    for (const name of [...r.images.keys()]) {
+      if (now.has(name)) continue
+      r.images.delete(name)
+      r.sent.delete(name)
+    }
+    r.shared = sharedStems(names)
+    const added: ImageItem[] = []
+    for (const name of names) {
+      if (r.images.has(name)) continue
+      const item: ImageItem = { ...EMPTY_SUMMARY, name, labelled: hasLabels(dir, name) }
+      r.images.set(name, item)
+      added.push(item)
+    }
+    return { names, added }
+  })
 }
 
 // Reading every label file takes a while in a big folder, so the list shows first and
@@ -362,7 +608,27 @@ export function closeProject(dir: string) {
 const summaryCache = new Map<string, { key: string; item: Partial<ImageItem>; labels: string[] }>()
 const anySize: SizeOf = async () => [1, 1]
 
-export async function summarizeAll(dir: string, send: (batch: { root: string; items: ImageItem[]; labels: string[] }) => void, prefer: LabelFormat = 'labelme') {
+/**
+ * Whether files exist, by their folders' listings, each read once: a pass over a big folder asks
+ * about thousands of label files, and most of them don't exist
+ */
+function listings() {
+  const folders = new Map<string, Promise<Set<string> | null>>()
+  // As the file system finds them: Windows and macOS find A.JSON when asked for a.json
+  const fold = process.platform === 'darwin' ? (s: string) => s.normalize('NFC').toLowerCase()
+    : process.platform === 'win32' ? (s: string) => s.toLowerCase() : (s: string) => s
+  return async (file: string) => {
+    const dir = path.dirname(file)
+    let names = folders.get(dir)
+    if (!names) folders.set(dir, (names = fs.readdir(dir).then((list) => new Set(list.map(fold)), () => null)))
+    return (await names)?.has(fold(path.basename(file))) ?? false
+  }
+}
+
+/** `changedOnly` after a refresh: only images whose label files changed since the window was last told are sent */
+export async function summarizeAll(
+  dir: string, send: (batch: { root: string; items: ImageItem[]; labels: string[] }) => void, prefer: LabelFormat = 'labelme', changedOnly = false
+) {
   const r = getRoot(dir)
   const names = [...r.images.keys()]
   let batch: ImageItem[] = []
@@ -375,12 +641,24 @@ export async function summarizeAll(dir: string, send: (batch: { root: string; it
     labels = new Set()
     last = Date.now()
   }
+  const exists = listings()
+  const stamp = async (file: string) => ((await exists(file)) ? fs.stat(file).then((s) => `${s.size}:${s.mtimeMs}`, () => '') : '')
+  // One classes.txt serves a whole folder, and it's small: it goes by what it holds, as another app
+  // renaming a class can leave its size as it was, and within one tick of a coarse file clock its time
+  const classesStamps = new Map<string, Promise<string>>()
+  const classesStamp = (file: string) => {
+    if (!classesStamps.has(file)) classesStamps.set(file, exists(file).then((there) => (there ? fs.readFile(file).then(sha1, () => '') : '')))
+    return classesStamps.get(file)!
+  }
   const one = async (name: string) => {
+    // Every label file the image has or could have, by size and time: a refresh skips images whose files are as they were
+    const seen = (await Promise.all([...[...labelFiles(dir, name).keys()].map(stamp), classesStamp(yoloClasses(labelPath(dir, name, 'yolo')))])).join('\0')
+    if (changedOnly && r.sent.get(name) === seen) return
     const found = await findLabels(dir, name, prefer).catch(() => null)
     const stat = found && await fs.stat(found.file).catch(() => null)
     // YOLO's names come from classes.txt, so a change there counts too
-    const classes = found?.format === 'yolo' ? await fs.stat(yoloClasses(found.file)).catch(() => null) : null
-    const key = found && stat ? `${found.format}:${stat.size}:${stat.mtimeMs}:${classes?.mtimeMs ?? ''}` : 'none'
+    const classes = found?.format === 'yolo' ? await classesStamp(yoloClasses(found.file)) : ''
+    const key = found && stat ? `${found.format}:${stat.size}:${stat.mtimeMs}:${classes}` : 'none'
     // By image too: one CreateML file can hold every image's labels
     const id = `${found?.file ?? ''}\0${name}`
     let cached = summaryCache.get(id)
@@ -402,6 +680,7 @@ export async function summarizeAll(dir: string, send: (batch: { root: string; it
     if (roots.get(dir) !== r) return
     const merged: ImageItem = { ...EMPTY_SUMMARY, broken: undefined, verified: undefined, ...cached.item, name, embedded: r.images.get(name)?.embedded }
     r.images.set(name, merged)
+    r.sent.set(name, seen)
     batch.push(merged)
     cached.labels.forEach((l) => labels.add(l))
     if (batch.length >= 200 || Date.now() - last > 150) flush()
@@ -431,8 +710,11 @@ export type SaveRequest = {
   depth?: number
   /** The format the image is being switched from: its old file goes to the trash once the new one is written */
   from?: LabelFormat
+  /** Saved automatically, after a change, rather than by hand */
+  auto?: boolean
 }
-export type Saved = { file: string; item: ImageItem; format: LabelFormat; replaced?: string; kept?: string }
+/** `format` is null when the image has no label file now: saved automatically, it had nothing to keep */
+export type Saved = { file: string; item: ImageItem; format: LabelFormat | null; replaced?: string; kept?: string }
 /** What a save reads from the image, read in its turn so saves of one image can't overtake each other */
 export type FromImage = { imageData?: () => Promise<string | null>; depth?: () => Promise<number> }
 
@@ -453,10 +735,32 @@ export async function saveLabels(dir: string, name: string, req: SaveRequest, fr
     const file = req.target ? path.resolve(req.target) : labelPath(dir, name, format)
     const image = imagePath(dir, name)
     const verified = !!req.verified
+    // Labels another app changed since the window read them are never written over, even by Save as
+    const own = !req.target || labelFiles(dir, name).has(file)
+    if (own && await changedSince(dir, name)) throw new LabelsChanged(name)
     // A switch converts this image's labels: labels it already has in the new format are never written over
     const switching = !!req.from && req.from !== format && !req.target
     if (switching && await hasLabelsIn(dir, name, format)) {
       throw new Error(`${path.basename(file)} already holds labels of ${name} as ${FORMAT_NAMES[format]}, so it's left unchanged`)
+    }
+    // Saved automatically: has the image no label file, or only one these saves made, as they wrote it?
+    const key = heldKey(dir, name)
+    let ours = false
+    if (req.auto && !req.target && !embedded && !r.outputFile) {
+      const found = await findLabels(dir, name, format)
+      const last = made.get(key)
+      ours = !found || (last?.file === found.file && last.stamp === await stampOf(found.file, found.format))
+      // Then, with nothing to keep, it's left with none
+      if (ours && !req.shapes.length && !verified && !Object.values(req.flags).some(Boolean)) {
+        if (found) {
+          await fs.rm(found.file, { force: true })
+          await wrote(dir, name, found.file, found.format)
+        }
+        made.delete(key)
+        const item: ImageItem = { ...EMPTY_SUMMARY, name, verified: undefined }
+        r.images.set(name, item)
+        return { file, item, format: null }
+      }
     }
     const imageData = fromImage.imageData ? await fromImage.imageData() : req.imageData
     const text = await readText(file)
@@ -473,6 +777,7 @@ export async function saveLabels(dir: string, name: string, req: SaveRequest, fr
         }
         if (rest !== null) throw new Error(`${path.basename(file)} holds CreateML labels of other images too, so it's left unchanged`)
         await trash(file)
+        if (own) await wrote(dir, name, file, 'createml')
         replaced = file
       } else if (text !== null) {
         try {
@@ -522,7 +827,9 @@ export async function saveLabels(dir: string, name: string, req: SaveRequest, fr
       }
       // Class numbers never move: new labels go after the ones classes.txt has
       const out = writeYolo(req.shapes, [...known, ...(req.classes ?? []).filter((c) => !known.includes(c))], req.size[0], req.size[1])
-      if (classesText === null || out.classes.length !== known.length) await writeAtomic(classesFile, writeClasses(out.classes))
+      if (classesText === null || out.classes.length !== known.length) {
+        await writeAtomic(classesFile, known.length ? addClasses(classesText!, out.classes.slice(known.length)) : writeClasses(out.classes))
+      }
       await writeAtomic(file, out.text)
     } else {
       let existing: string | null = null
@@ -535,6 +842,7 @@ export async function saveLabels(dir: string, name: string, req: SaveRequest, fr
           throw unreadable(file, e)
         }
         await trash(file)
+        if (own) await wrote(dir, name, file, 'labelme')
         replaced = file
       }
       let out: string
@@ -544,6 +852,12 @@ export async function saveLabels(dir: string, name: string, req: SaveRequest, fr
         throw unreadable(file, e, ' as CreateML')
       }
       await writeAtomic(file, out)
+    }
+    if (own) {
+      const stamp = await wrote(dir, name, file, format)
+      // Saved by hand, it's the person's file
+      if (ours) made.set(key, { file, stamp })
+      else made.delete(key)
     }
     // Switched to another format: one image, one label file, so which one opens is never in doubt
     let kept: string | undefined
@@ -564,13 +878,24 @@ export async function saveLabels(dir: string, name: string, req: SaveRequest, fr
   })
 }
 
-export async function loadLabels(dir: string, name: string, prefer: LabelFormat = 'labelme', size: SizeOf = anySize) {
+/**
+ * The image's labels. With `edit`, the window opens them to edit: their files are remembered as
+ * they are, and `changed` says whether another app changed them since Seamtag last read or wrote them.
+ */
+export async function loadLabels(dir: string, name: string, prefer: LabelFormat = 'labelme', size: SizeOf = anySize, edit = false) {
   return serial(async () => {
+    let changed = false
+    if (edit) {
+      // Remembered before reading, so a change made meanwhile is found when saving, not missed
+      changed = await changedSince(dir, name)
+      held.set(heldKey(dir, name), await stampsOf(dir, name))
+      getRoot(dir).editing = name
+    }
     const found = await findLabels(dir, name, prefer)
     const labels = found && await readLabels(dir, name, found, size)
-    if (!labels) return { file: labelPath(dir, name, prefer), format: null, verified: false, doc: null }
+    if (!labels) return { file: labelPath(dir, name, prefer), format: null, verified: false, doc: null, changed }
     // imageData can be megabytes: the window doesn't need it
-    return { file: labels.file, format: labels.format, verified: labels.verified, doc: { ...labels.doc, imageData: labels.doc.imageData ? '' : null } }
+    return { file: labels.file, format: labels.format, verified: labels.verified, doc: { ...labels.doc, imageData: labels.doc.imageData ? '' : null }, changed }
   })
 }
 
@@ -582,22 +907,23 @@ export async function labelsFile(dir: string, name: string, prefer: LabelFormat)
 /** Takes an image's labels away: to the trash, or out of a CreateML list that holds other images too */
 async function dropLabels(dir: string, name: string, found: Found) {
   const text = found.format === 'createml' ? await readText(found.file) : null
+  let rest: string | null = null
   if (text !== null) {
-    let rest: string | null
     try {
       rest = removeCreateML(text, createmlName(dir, name))
     } catch (e) {
       // The one output file holds every image's labels: one that can't be read stays as it is
       if (found.file === getRoot(dir).outputFile) throw unreadable(found.file, e)
-      rest = null
     }
-    if (rest !== null) return writeAtomic(found.file, rest)
   }
-  await trash(found.file)
+  if (rest !== null) await writeAtomic(found.file, rest)
+  else await trash(found.file)
+  await wrote(dir, name, found.file, found.format)
 }
 
 export async function trashLabels(dir: string, name: string, prefer: LabelFormat) {
   return serial(async () => {
+    if (await changedSince(dir, name)) throw new LabelsChanged(name)
     const found = await findLabels(dir, name, prefer)
     if (found) await dropLabels(dir, name, found)
     return found?.file ?? null
@@ -609,6 +935,7 @@ export async function trashImage(dir: string, name: string) {
   return serial(async () => {
     const r = getRoot(dir)
     if (r.embedded.has(name)) throw new Error('This image lives inside its label file: delete the label file instead')
+    if (await changedSince(dir, name)) throw new LabelsChanged(name)
     const image = imagePath(dir, name)
     const labels: Found[] = []
     const json = labelPath(dir, name)
@@ -619,6 +946,7 @@ export async function trashImage(dir: string, name: string) {
     // The image first: if it can't go, its labels stay with it
     await trash(image)
     r.images.delete(name)
+    r.sent.delete(name)
     const kept: string[] = []
     for (const found of labels) {
       try {
@@ -627,6 +955,7 @@ export async function trashImage(dir: string, name: string) {
         kept.push(e.message)
       }
     }
+    held.delete(heldKey(dir, name))
     return { image, kept: kept.length ? kept.join('; ') : undefined }
   })
 }

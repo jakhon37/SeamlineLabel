@@ -61,6 +61,31 @@ describe('reading', () => {
   })
 })
 
+// Files Seamline's engine and app check in these same words, so all three read alike: a copy of
+// Seamline's tests/fixtures/seamtag/labelme_checks.json, which both of them run
+describe("the LabelMe checks Seamline shares", () => {
+  const cases: { name: string; text: string; error: string | null }[] = JSON.parse(
+    readFileSync(path.join(FIXTURES, 'seamline', 'labelme_checks.json'), 'utf8')
+  )
+  // Each language's JSON parser words its own errors after these words
+  const NOT_JSON = "It isn't valid JSON"
+  test.each(cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {
+    if (c.error === null) {
+      expect(() => parseLabelFile(c.text)).not.toThrow()
+      return
+    }
+    expect(() => parseLabelFile(c.text)).toThrow(LabelFileError)
+    let message = ''
+    try {
+      parseLabelFile(c.text)
+    } catch (e) {
+      message = (e as Error).message
+    }
+    if (c.error === NOT_JSON) expect(message.startsWith(`${NOT_JSON} (`), message).toBe(true)
+    else expect(message).toBe(c.error)
+  })
+})
+
 describe('writing', () => {
   test('a file labelme 5 wrote comes back byte for byte', () => {
     const text = readFileSync(path.join(FIXTURES, 'labelme5/all_shapes.json'), 'utf8')

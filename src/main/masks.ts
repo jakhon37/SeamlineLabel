@@ -1,70 +1,9 @@
-import { contours } from 'd3-contour'
 import sharp from 'sharp'
 import { roundHalfEven } from './detections'
+import { type Mask, outerRings, simplifyRing } from './outline'
 
 // Masks to the shapes labelme makes of them: a polygon around the largest part, or a
 // labelme mask shape (a box and the pixels inside it as a PNG of 0s and 1s).
-
-export type Mask = { data: Uint8Array; width: number; height: number }
-
-function ringArea(ring: number[][]) {
-  let sum = 0
-  for (let i = 0; i < ring.length; i++) {
-    const [x0, y0] = ring[i], [x1, y1] = ring[(i + 1) % ring.length]
-    sum += x0 * y1 - x1 * y0
-  }
-  return Math.abs(sum) / 2
-}
-
-function segmentDistance(p: number[], a: number[], b: number[]) {
-  const dx = b[0] - a[0], dy = b[1] - a[1]
-  const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1)))
-  return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy)
-}
-
-/** Douglas-Peucker on a closed ring, as skimage's approximate_polygon and OpenCV's approxPolyDP do */
-export function simplifyRing(ring: number[][], tolerance: number): number[][] {
-  if (ring.length <= 4) return ring
-  // Split at the two points furthest apart, so the closing edge is treated like any other
-  let far = 0, best = -1
-  for (let i = 1; i < ring.length; i++) {
-    const d = Math.hypot(ring[i][0] - ring[0][0], ring[i][1] - ring[0][1])
-    if (d > best) { best = d; far = i }
-  }
-  const keep = new Uint8Array(ring.length)
-  keep[0] = keep[far] = 1
-  const walk = (from: number, to: number) => {
-    const stack = [[from, to]]
-    while (stack.length) {
-      const [a, b] = stack.pop()!
-      let index = -1, dist = tolerance
-      for (let i = a + 1; i < b; i++) {
-        const d = segmentDistance(ring[i % ring.length], ring[a % ring.length], ring[b % ring.length])
-        if (d > dist) { dist = d; index = i }
-      }
-      if (index >= 0) {
-        keep[index % ring.length] = 1
-        stack.push([a, index], [index, b])
-      }
-    }
-  }
-  walk(0, far)
-  walk(far, ring.length)
-  return ring.filter((_, i) => keep[i])
-}
-
-/** The outer rings of the parts of a mask, each with its area, largest first */
-export function outerRings(mask: Mask): { ring: number[][]; area: number }[] {
-  const values = new Float32Array(mask.width * mask.height)
-  for (let i = 0; i < values.length; i++) values[i] = mask.data[i] ? 1 : 0
-  const [contour] = contours().size([mask.width, mask.height]).thresholds([0.5])(values as unknown as number[])
-  const rings = (contour?.coordinates ?? []).map((polygon) => {
-    // GeoJSON closes each ring by repeating its first point
-    const ring = polygon[0].slice(0, -1)
-    return { ring, area: ringArea(ring) }
-  })
-  return rings.sort((a, b) => b.area - a.area)
-}
 
 /** labelme's compute_polygon_from_mask: the largest part, simplified by 0.4% of its size */
 export function polygonFromMask(mask: Mask, scale = 1): number[][] {

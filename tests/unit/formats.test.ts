@@ -54,6 +54,16 @@ describe.each(['1.8.6', 'master'])('LabelImg %s', (version) => {
     expect(corners(got)).toEqual(labelimgCorners(half.read.yolo.shapes))
   })
 
+  test('YOLO with a byte order mark before classes.txt: the same boxes, and the mark left out of the first name', () => {
+    const marked = cases(version).find((c) => c.image === 'marked.png')!
+    const got = readYolo(read(version, 'yolo-bom', 'marked.txt'), readClasses(read(version, 'yolo-bom', 'classes.txt')), marked.size[0], marked.size[1])
+    // Not as LabelImg: it keeps the mark, so its class 0 is "\uFEFFdog", which no label typed as dog
+    // matches. Seamline leaves the mark out too, so class 0 is the dog both apps show and train.
+    const labelimg = labelimgCorners(marked.read.yolo.shapes)
+    expect(labelimg.map((s) => s[0])).toEqual(['\uFEFFdog', 'cat'])
+    expect(corners(got)).toEqual(labelimg.map(([label, ...rest]) => [String(label).replace(/^\uFEFF/, ''), ...rest]))
+  })
+
   test('CreateML: the boxes as LabelImg reads them, and as master writes them, byte for byte', () => {
     for (const c of cases(version).filter((x) => x.shapes)) {
       const text = read(version, 'createml', `${stem(c)}.json`)
@@ -140,6 +150,12 @@ describe('YOLO from other tools', () => {
   test('classes.txt keeps blank lines inside it, so the numbers after them stay; Windows line ends read too', () => {
     expect(readClasses('a\n\nc\n')).toEqual(['a', '', 'c'])
     expect(readClasses('a\r\nb\r\n')).toEqual(['a', 'b'])
+  })
+  test('one byte order mark at the start is no part of the first name, which keeps its number', () => {
+    expect(readClasses('\uFEFFa\r\nb\r\n')).toEqual(['a', 'b'])
+    expect(readClasses('\uFEFF\na\n')).toEqual(['', 'a'])
+    expect(readClasses('\uFEFF\uFEFFa\nb')).toEqual(['\uFEFFa', 'b'])
+    expect(readClasses('a\n\uFEFFb\n')).toEqual(['a', '\uFEFFb'])
   })
 })
 

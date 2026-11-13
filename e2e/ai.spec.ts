@@ -2,16 +2,9 @@ import { expect, test } from '@playwright/test'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import path from 'path'
 import sharp from 'sharp'
-import { click, doc, finish, launch, onImage, open, project, saved, shapesIn, square, W, H } from './helpers'
+import { click, discs, doc, finish, launch, onImage, open, project, saved, shapesIn, square } from './helpers'
 
 const MODEL = path.resolve(__dirname, '../tests/fixtures/models/discs.onnx')
-
-// A grey image with a red and a blue disc, as the test model knows them
-async function discs(dir: string, name: string, items: { cx: number; cy: number; r: number; color: string }[]) {
-  const svg = `<svg width="${W}" height="${H}">${items.map((d) => `<circle cx="${d.cx}" cy="${d.cy}" r="${d.r}" fill="${d.color}"/>`).join('')}</svg>`
-  await sharp({ create: { width: W, height: H, channels: 3, background: '#707478' } })
-    .composite([{ input: Buffer.from(svg) }]).png().toFile(path.join(dir, `${name}.png`))
-}
 
 test('pre-label with a segmentation model, then review what it proposed', async () => {
   const dir = await project('prelabel', { done: doc('done', [square('red', 10, 10, 50, 50)]) })
