@@ -29,3 +29,11 @@ export function summarize(shapes: Shape[], labelled = true): Summary {
 }
 
 export const EMPTY_SUMMARY: Summary = { count: 0, ai: 0, score: null, classes: {}, labelled: false }
+
+/** Does the shape cover pixels, as a model learns from it? Lines and points don't, nor a shape short of points. */
+export function hasArea(s: Shape) {
+  const n = s.points.length
+  if (s.shape_type === 'polygon' || s.shape_type === 'oriented_rectangle') return n >= 3
+  if (s.shape_type === 'rectangle' || s.shape_type === 'circle') return n >= 2
+  return s.shape_type === 'mask' && n >= 2 && !!s.mask
+}

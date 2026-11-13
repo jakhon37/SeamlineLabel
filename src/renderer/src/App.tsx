@@ -5,13 +5,13 @@ import { FORMAT_NAMES, LABEL_FORMATS } from '../../shared/formats'
 import Labeler, { type Commands, type LabelerHandle, type Settings } from './Labeler'
 import Logo from './Logo'
 import MenuBar, { ContextMenu, type MenuSpec } from './Menu'
-import { type ImageItem, type OpenProject, plainError, type ProjectInfo, type Start } from './types'
+import { type ImageItem, type LabelClass, type OpenProject, plainError, type ProjectInfo, type Start } from './types'
 
 const DOCS = 'https://github.com/jakhon37/Seamtag#readme'
 const KEPT = 'seamtag:settings'
 
 // Settings made in the window that outlast it. Saving and the like start from the config each time, as in labelme.
-type Kept = Pick<Settings, 'fill' | 'fit' | 'aiModel' | 'aiOutput' | 'prelabelModel' | 'docks' | 'dark' | 'displayLabels' | 'drawSquares' | 'advanced' | 'drawColor'>
+type Kept = Pick<Settings, 'fill' | 'fit' | 'aiModel' | 'aiOutput' | 'prelabelModel' | 'prelabelModels' | 'docks' | 'dark' | 'displayLabels' | 'drawSquares' | 'advanced' | 'drawColor'>
 function readKept(): Partial<Kept> {
   try {
     return JSON.parse(localStorage.getItem(KEPT) ?? '{}')
@@ -42,6 +42,7 @@ function initialSettings(config: Config): Settings {
     // labelme's SAM 3 can't run here (see src/main/ai.ts): YOLO-World finds by words
     aiTextModel: 'yoloworld:latest',
     prelabelModel: kept.prelabelModel ?? '',
+    prelabelModels: kept.prelabelModels && typeof kept.prelabelModels === 'object' ? kept.prelabelModels : {},
     docks: {
       files: config.file_dock.show, labels: config.label_dock.show, shapes: config.shape_dock.show, flags: config.flag_dock.show,
       ...kept.docks
@@ -60,7 +61,7 @@ const MENUS: MenuSpec = [
   { label: 'File', items: ['open', 'open_dir', { label: 'Open recent', items: [], prefix: 'recent:' }, 'open_annotation', '-', 'open_next', 'open_prev', 'copy_previous_shapes', '-', 'save', 'save_as', { label: 'Save format', items: [], prefix: 'format:' }, 'auto_save', 'with_image_data', 'save_to', '-', 'delete_file', 'delete_image', 'reveal', 'close', '-', 'preferences', 'reset_settings', 'quit'] },
   { label: 'Edit', items: ['create_polygon', 'create_rectangle', 'create_oriented_rectangle', 'create_circle', 'create_line', 'create_point', 'create_linestrip', 'create_ai_points', 'create_ai_box', 'create_brush', 'create_eraser', 'edit_shape', 'draw_squares', 'box_line_color', '-', 'edit_label', 'duplicate_shape', 'copy_shape', 'paste_shape', 'delete_shape', 'merge_shapes', '-', 'undo', 'redo', 'remove_selected_point', 'add_point_to_edge', 'add_multiple_points', 'toggle_lock', 'toggle_difficult', 'shape_line_color', 'shape_fill_color', '-', 'verify_image', 'toggle_keep_prev_mode', '-', { label: 'Select a neighbour', items: ['select_shape_up', 'select_shape_down', 'select_shape_left', 'select_shape_right'] }] },
   { label: 'View', items: ['dock_flags', 'dock_labels', 'dock_shapes', 'dock_files', 'toggle_label_panel', '-', 'fill_drawing', 'display_labels', 'toggle_all_shapes', 'hide_all_shapes', 'show_all_shapes', '-', 'single_class_mode', 'advanced_mode', '-', 'zoom_in', 'zoom_out', 'zoom_to_original', 'fit_window', 'fit_selection', 'fit_width', 'keep_prev_scale', '-', 'brightness_contrast', 'keep_prev_brightness_contrast', '-', 'dark_mode'] },
-  { label: 'AI', items: ['create_ai_points', 'create_ai_box', { label: 'Model for AI points and box', items: [], prefix: 'ai_model:' }, { label: 'AI makes', items: [], prefix: 'ai_output:' }, { label: 'Model for the text prompt', items: [], prefix: 'ai_text_model:' }, 'ai_models', '-', 'prelabel_pick', 'prelabel_one', 'prelabel_all', '-', 'review_accept', 'review_reject', 'review_skip', 'review_accept_all', 'order_certainty'] },
+  { label: 'AI', items: ['create_ai_points', 'create_ai_box', { label: 'Model for AI points and box', items: [], prefix: 'ai_model:' }, { label: 'AI makes', items: [], prefix: 'ai_output:' }, { label: 'Model for the text prompt', items: [], prefix: 'ai_text_model:' }, 'ai_models', '-', { label: 'Model for pre-labelling', items: [], prefix: 'prelabel_model:' }, 'prelabel_pick', 'prelabel_one', 'prelabel_all', '-', 'review_accept', 'review_reject', 'review_skip', 'review_accept_all', 'order_certainty'] },
   { label: 'Help', items: ['shortcuts', 'docs', 'about'] }
 ]
 const CONTEXT = ['edit_label', 'duplicate_shape', 'copy_shape', 'paste_shape', 'delete_shape', 'merge_shapes', 'toggle_lock', 'toggle_difficult', 'shape_line_color', 'shape_fill_color', '-', 'undo', 'redo', '-', 'add_point_to_edge', 'add_multiple_points', 'remove_selected_point', '-', 'edit_shape', 'create_polygon', 'create_rectangle']
@@ -79,28 +80,40 @@ export default function App() {
   const config = start?.config ?? null
   const mac = start?.platform === 'darwin'
 
-  const showError = useCallback((message: string) => setError(plainError(message)), [])
+  // The image a message is about, if one is: once another image is on screen, it goes, rather than seem to be about that one
+  const errorImage = useRef<string | null>(null)
+  const showError = useCallback((message: string, image?: string) => {
+    errorImage.current = image ?? null
+    setError(plainError(message))
+  }, [])
+  const shown = useCallback((image: string) => {
+    if (errorImage.current === null || errorImage.current === image) return
+    errorImage.current = null
+    setError('')
+  }, [])
   const setSettings = useCallback((fn: (s: Settings) => Settings) => setSettingsState((s) => (s ? fn(s) : s)), [])
 
   useEffect(() => {
     if (!settings) return
-    const { fill, fit, aiModel, aiOutput, prelabelModel, docks, dark, displayLabels, drawSquares, advanced, drawColor } = settings
+    const { fill, fit, aiModel, aiOutput, prelabelModel, prelabelModels, docks, dark, displayLabels, drawSquares, advanced, drawColor } = settings
     try {
-      localStorage.setItem(KEPT, JSON.stringify({ fill, fit, aiModel, aiOutput, prelabelModel, docks, dark, displayLabels, drawSquares, advanced, drawColor }))
+      localStorage.setItem(KEPT, JSON.stringify({ fill, fit, aiModel, aiOutput, prelabelModel, prelabelModels, docks, dark, displayLabels, drawSquares, advanced, drawColor }))
     } catch {
       // Not kept, then
     }
     document.documentElement.dataset.theme = settings.dark ? 'dark' : 'light'
   }, [settings])
 
-  const open = useCallback(async (target: string, output: string | null = data?.outputDir ?? null) => {
-    if (labeler.current && !(await labeler.current.canLeave())) return
+  // `started`: Seamtag was started on it, so an image in a subfolder of a Seamline project opens the project.
+  // `again`: opened from Open recent, so a folder remembered on an image opens on it.
+  const open = useCallback(async (target: string, output: string | null = data?.outputDir ?? null, started = false, again = false) => {
+    if (labeler.current && !(await labeler.current.canLeave(true))) return
     try {
-      const next = await window.api.openProject(target, output)
+      const next = await window.api.openProject(target, output, started, again)
       if (data && data.root !== next.root) window.api.closeProject(data.root)
       setDiscovered([])
       setData(next)
-      localStorage.setItem('lastProject', target)
+      localStorage.setItem('lastProject', next.remembered)
     } catch (e) {
       showError(`Could not open ${target}: ${plainError(e)}`)
     }
@@ -114,7 +127,7 @@ export default function App() {
       s.warnings.forEach((w) => showError(w))
       const first = s.filename ?? localStorage.getItem('lastProject')
       if (first) {
-        window.api.openProject(first, s.output).then((p) => { setData(p) }).catch((e) => {
+        window.api.openProject(first, s.output, !!s.filename, !s.filename).then((p) => { setData(p) }).catch((e) => {
           if (s.filename) showError(`Could not open ${s.filename}: ${plainError(e)}`)
         })
       }
@@ -134,16 +147,55 @@ export default function App() {
       return fresh.length ? [...list, ...fresh] : list
     })
   }), [])
+  // Seamtag started again, as Seamline's Label in Seamtag starts it: what it was given opens here
+  useEffect(() => window.api.onOpen(({ target, output, here }) => {
+    if (data && here?.root === data.root && (!output || output === data.outputDir)) {
+      if (here.name) labeler.current?.show(here.name)
+      return
+    }
+    // Not over a dialog, a menu or a shape being drawn, which closing the folder would cut short: it says so instead
+    const busy = labeler.current?.busy()
+    if (busy) return showError(`${target} wasn't opened. ${busy}`)
+    open(target, output, true)
+  }), [data, open, showError])
   // Closing the window: unsaved work is saved, or asked about, first
   useEffect(() => window.api.onFlush(async () => {
     const ok = labeler.current ? await labeler.current.canLeave() : true
     window.api.flushed(ok)
   }), [])
 
-  const setProject = useCallback((project: ProjectInfo) => {
+  // Counts the class list's saves and reads, so an older one's answer never undoes a newer change
+  const projectTurn = useRef(0)
+  // `shown`: the label list with its colours, which a folder's first class list takes for the labels it starts with
+  const setProject = useCallback((project: ProjectInfo, shown?: LabelClass[]) => {
     setData((d) => d && { ...d, project, hasProjectFile: true })
-    if (data) window.api.saveProject(data.root, project).catch((e) => showError(`The label list couldn't be saved: ${plainError(e)}`))
+    if (!data) return
+    const { root } = data
+    const turn = ++projectTurn.current
+    // Saved with the changes another app, such as Seamline, made to the file meanwhile, which show here then
+    window.api.saveProject(root, project, shown).then((saved) => {
+      if (turn === projectTurn.current) setData((d) => (d && d.root === root ? { ...d, project: saved } : d))
+    }).catch((e) => showError(`The label list couldn't be saved: ${plainError(e)}`))
   }, [data, showError])
+  // Back from another app, such as Seamline: the class list as the file has it now
+  useEffect(() => {
+    if (!data?.root) return
+    const { root } = data
+    return window.api.onFocus(() => {
+      const turn = ++projectTurn.current
+      window.api.reloadProject(root).then((file) => {
+        if (turn !== projectTurn.current) return
+        setData((d) => {
+          if (!d || d.root !== root) return d
+          const project = file ?? { name: d.project.name, classes: [] }
+          return JSON.stringify(project) === JSON.stringify(d.project) && d.hasProjectFile === !!file ? d : { ...d, project, hasProjectFile: !!file }
+        })
+      }).catch(() => {
+        // Read again the next time the window comes back
+      })
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.root])
   const setImages = useCallback((fn: (images: ImageItem[]) => ImageItem[]) => setData((d) => d && { ...d, images: fn(d.images) }), [])
 
   const pickOpen = async () => {
@@ -159,7 +211,7 @@ export default function App() {
   const nextToImages = async () => {
     if (!data?.outputDir) return
     const current = data.images.find((i) => i.name === data.select)?.name
-    if (labeler.current && !(await labeler.current.canLeave())) return
+    if (labeler.current && !(await labeler.current.canLeave(true))) return
     try {
       const next = await window.api.openProject(data.root, null)
       setData({ ...next, select: current ?? next.select })
@@ -172,7 +224,7 @@ export default function App() {
     const dir = await window.api.pickFolder('Save label files in')
     if (!dir) return
     const current = data.images.find((i) => i.name === data.select)?.name
-    if (labeler.current && !(await labeler.current.canLeave())) return
+    if (labeler.current && !(await labeler.current.canLeave(true))) return
     try {
       const next = await window.api.openProject(data.root, dir)
       setData({ ...next, select: current ?? next.select })
@@ -181,7 +233,7 @@ export default function App() {
     }
   }
   const closeFolder = async () => {
-    if (labeler.current && !(await labeler.current.canLeave())) return
+    if (labeler.current && !(await labeler.current.canLeave(true))) return
     if (data) window.api.closeProject(data.root)
     localStorage.removeItem('lastProject')
     setData(null)
@@ -222,7 +274,7 @@ export default function App() {
       docs: { label: 'Documentation', run: () => window.api.openLink(DOCS) },
       about: { label: `About Seamtag`, run: () => setAbout(true) }
     }
-    ;(start?.recent ?? []).forEach((r, i) => (own[`recent:${i}`] = { label: r, run: () => open(r) }))
+    ;(start?.recent ?? []).forEach((r, i) => (own[`recent:${i}`] = { label: r, run: () => open(r, undefined, false, true) }))
     return { ...(labeler.current?.commands ?? {}), ...own }
   }
   // App-wide shortcuts, for when no folder is open: the labeller handles the rest
@@ -301,14 +353,14 @@ export default function App() {
           {start.recent.length > 0 && (
             <div className="recent">
               <h3>Recent</h3>
-              {start.recent.slice(0, 5).map((r) => <button key={r} className="file" onClick={() => open(r)} title={r}><span className="name">{r}</span></button>)}
+              {start.recent.slice(0, 5).map((r) => <button key={r} className="file" onClick={() => open(r, undefined, false, true)} title={r}><span className="name">{r}</span></button>)}
             </div>
           )}
         </div>
       ) : (
         <div className="page">
           <Labeler key={`${data.root}\n${data.outputDir ?? ''}`} ref={labeler} data={data} config={config} settings={settings} setSettings={setSettings} onChangeOutput={changeOutput} onNextToImages={nextToImages}
-            setProject={setProject} setImages={setImages} discovered={discovered} mac={mac} onError={showError}
+            setProject={setProject} setImages={setImages} discovered={discovered} mac={mac} onError={showError} onShown={shown}
             onOpenMenu={(x, y) => setContext({ x, y })} onChange={() => setTick((t) => t + 1)} />
         </div>
       )}

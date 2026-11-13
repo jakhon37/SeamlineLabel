@@ -1,4 +1,5 @@
 import type { Config } from '../../shared/config'
+import type { LabelClass } from './types'
 
 // labelme's colours: imgviz.label_colormap(), the PASCAL VOC map, picked by a label's place
 // in the label list. Seamline projects can set their own in .myseg/project.json.
@@ -28,6 +29,30 @@ export function labelColor(label: string, index: number, config: Config, project
   if (mode === 'auto') return autoColor(index, config)
   return hex(mode === 'uniform' ? uniform.color : by_label.fallback)
 }
+
+/**
+ * The label list, each label with its colour: config labels, then a Seamline project's classes, then
+ * labels found in the files or on screen. `kept` is the list as it was when a label was last added
+ * or recoloured here: those labels stay where they were, where a growing class list would move the
+ * others along, and their colours with them.
+ */
+export function labelList(config: Config, classes: LabelClass[], found: string[], kept: string[] | null = null) {
+  const names: string[] = []
+  const add = (n: string) => n && !names.includes(n) && names.push(n)
+  ;(config.labels ?? []).forEach(add)
+  classes.forEach((c) => add(c.name))
+  found.forEach(add)
+  const order = kept ? [...kept.filter((n) => names.includes(n)), ...names.filter((n) => !kept.includes(n))] : names
+  return order.map((name, i) => ({ name, color: labelColor(name, i, config, classes.find((c) => c.name === name)?.color) }))
+}
+
+// The class list is Seamline's list of what to train, one model output each: a change made here
+// carries that one label, never the list's others from the config or the files
+/** A label added: the classes, then it */
+export const withClass = (classes: LabelClass[], name: string, color: string): LabelClass[] => [...classes, { name, color }]
+/** A label's colour changed: a class takes it, any other label joins the classes with it */
+export const recolored = (classes: LabelClass[], name: string, color: string): LabelClass[] =>
+  classes.some((c) => c.name === name) ? classes.map((c) => (c.name === name ? { ...c, color } : c)) : withClass(classes, name, color)
 
 export function withAlpha(color: string, alpha: number) {
   const v = parseInt(color.slice(1), 16)

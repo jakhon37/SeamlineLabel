@@ -98,6 +98,14 @@ hand_image = QImage(64, 40, QImage.Format_RGB32)
 expected.append({"image": "half.png", "size": [64, 40], "read": {
     "yolo": {"shapes": read_back(YoloReader(str(out / "yolo-hand" / "half.txt"), hand_image).get_shapes())}}})
 
+# classes.txt as editors that write a byte order mark save it, such as Windows Notepad before 2019:
+# LabelImg reads the mark as part of the first class's name
+(out / "yolo-bom").mkdir()
+(out / "yolo-bom" / "classes.txt").write_text("\ufeffdog\ncat\n", encoding="utf-8")
+(out / "yolo-bom" / "marked.txt").write_text(hand)
+expected.append({"image": "marked.png", "size": [64, 40], "read": {
+    "yolo": {"shapes": read_back(YoloReader(str(out / "yolo-bom" / "marked.txt"), hand_image).get_shapes())}}})
+
 (out / "labelimg.json").write_text(json.dumps(expected, ensure_ascii=False, indent=1) + "\n")
 
 # Python's '%.6f' and round(), with the halves where JavaScript's toFixed and Math.round differ

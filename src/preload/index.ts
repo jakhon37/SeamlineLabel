@@ -18,8 +18,13 @@ for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'])
     if (!pressed) for (const go of waiting.splice(0)) go()
   }, true)
 }
-const dialog = (channel: string, ...args: unknown[]) =>
-  (pressed ? new Promise<void>((go) => waiting.push(go)) : Promise.resolve()).then(() => ipc.invoke(channel, ...args))
+// The dialogs asking now, so nothing opened from outside slips in under one
+let asking = 0
+const dialog = (channel: string, ...args: unknown[]) => {
+  asking++
+  return (pressed ? new Promise<void>((go) => waiting.push(go)) : Promise.resolve()).then(() => ipc.invoke(channel, ...args))
+    .finally(() => { asking-- })
+}
 
 contextBridge.exposeInMainWorld('api', {
   start: () => ipc.invoke('app:start'),
@@ -27,12 +32,17 @@ contextBridge.exposeInMainWorld('api', {
   pickFile: (title: string, filters: unknown) => dialog('dialog:file', title, filters),
   pickSave: (title: string, defaultPath: string, format?: string) => dialog('dialog:save', title, defaultPath, format),
   ask: (message: string, detail: string, buttons: string[]) => dialog('dialog:ask', message, detail, buttons),
-  openProject: (target: string, output: string | null) => ipc.invoke('project:open', target, output),
+  asking: () => asking > 0,
+  openProject: (target: string, output: string | null, started?: boolean, again?: boolean) => ipc.invoke('project:open', target, output, started, again),
   closeProject: (root: string) => ipc.invoke('project:close', root),
-  saveProject: (root: string, project: unknown) => ipc.invoke('project:save', root, project),
+  saveProject: (root: string, project: unknown, shown?: unknown) => ipc.invoke('project:save', root, project, shown),
+  reloadProject: (root: string) => ipc.invoke('project:reload', root),
+  refreshProject: (root: string) => ipc.invoke('project:refresh', root),
+  summarize: (root: string) => ipc.invoke('project:summarize', root),
   openImage: (root: string, name: string) => ipc.invoke('image:open', root, name),
-  loadLabels: (root: string, name: string, prefer?: string, size?: number[]) => ipc.invoke('labels:load', root, name, prefer, size),
+  loadLabels: (root: string, name: string, prefer?: string, size?: number[], edit?: boolean) => ipc.invoke('labels:load', root, name, prefer, size, edit),
   saveLabels: (root: string, name: string, req: unknown) => ipc.invoke('labels:save', root, name, req),
+  labelsChanged: (root: string, name: string) => ipc.invoke('labels:changed', root, name),
   labelPath: (root: string, name: string, prefer: string) => ipc.invoke('labels:path', root, name, prefer),
   trashLabels: (root: string, name: string, prefer: string) => ipc.invoke('labels:trash', root, name, prefer),
   readLabelFile: (root: string, name: string, file: string, size?: number[]) => ipc.invoke('labels:read', root, name, file, size),
@@ -44,6 +54,8 @@ contextBridge.exposeInMainWorld('api', {
   openLink: (url: string) => ipc.invoke('app:link', url),
   pathForFile: (file: File) => webUtils.getPathForFile(file),
   onSummaries: on('project:summaries'),
+  onFocus: on('app:focus'),
+  onOpen: on('app:open'),
   onFlush: on('app:flush'),
   flushed: (ok: boolean) => ipc.send('app:flushed', ok),
   onError: on('app:error'),
@@ -55,10 +67,11 @@ contextBridge.exposeInMainWorld('api', {
   aiAssist: (req: unknown) => ipc.invoke('ai:assist', req),
   aiText: (req: unknown) => ipc.invoke('ai:text', req),
   mergeMasks: (shapes: unknown) => ipc.invoke('shapes:merge-masks', shapes),
-  prelabelPick: () => ipc.invoke('prelabel:pick'),
+  prelabelPick: (root?: string) => dialog('prelabel:pick', root),
   prelabelInfo: (path: string) => ipc.invoke('prelabel:info', path),
-  prelabelRun: (root: string, model: string, names: string[], classes: string[]) =>
-    ipc.invoke('prelabel:run', root, model, names, classes),
+  prelabelModels: (root: string) => ipc.invoke('prelabel:models', root),
+  prelabelRun: (root: string, model: string, names: string[], classes: string[], batch?: boolean) =>
+    ipc.invoke('prelabel:run', root, model, names, classes, batch),
   prelabelStop: () => ipc.invoke('prelabel:stop'),
   onPrelabel: on('prelabel:progress')
 })

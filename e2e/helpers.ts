@@ -33,24 +33,34 @@ export async function project(folder: string, files: Record<string, string | nul
   return dir
 }
 
+// A grey image with red and blue discs, as the test model (tests/fixtures/models/discs.onnx) knows them
+export async function discs(dir: string, name: string, items: { cx: number; cy: number; r: number; color: string }[]) {
+  const svg = `<svg width="${W}" height="${H}">${items.map((d) => `<circle cx="${d.cx}" cy="${d.cy}" r="${d.r}" fill="${d.color}"/>`).join('')}</svg>`
+  await sharp({ create: { width: W, height: H, channels: 3, background: '#707478' } })
+    .composite([{ input: Buffer.from(svg) }]).png().toFile(path.join(dir, `${name}.png`))
+}
+
+export const HEADLESS = process.platform === 'linux' && !process.env.E2E_SHOW ? ['--ozone-platform=headless'] : []
+
+/** The app's environment: a home folder and profile of its own */
+export function appEnv(home: string) {
+  // A home with the folders Windows expects in one
+  const roaming = path.join(home, 'AppData', 'Roaming'), local = path.join(home, 'AppData', 'Local')
+  mkdirSync(roaming, { recursive: true })
+  mkdirSync(local, { recursive: true })
+  return {
+    ...process.env, HOME: home, USERPROFILE: home, APPDATA: roaming, LOCALAPPDATA: local, XDG_CONFIG_HOME: path.join(home, '.config'),
+    SEAMTAG_USER_DATA: path.join(home, 'profile')
+  } as Record<string, string>
+}
+
 /**
  * The app on a folder or file, with its own home folder and profile, so a test never reads or
  * writes the settings, config or recent files of the person running it.
  */
 export async function launch(target: string | null, extra: string[] = [], home?: string) {
   const own = home ?? mkdtempSync(path.join(tmpdir(), 'seamtag-home-'))
-  // A home with the folders Windows expects in one
-  const roaming = path.join(own, 'AppData', 'Roaming'), local = path.join(own, 'AppData', 'Local')
-  mkdirSync(roaming, { recursive: true })
-  mkdirSync(local, { recursive: true })
-  const headless = process.platform === 'linux' && !process.env.E2E_SHOW ? ['--ozone-platform=headless'] : []
-  const app = await electron.launch({
-    args: [path.resolve(__dirname, '..'), ...headless, ...(target ? [target] : []), ...extra],
-    env: {
-      ...process.env, HOME: own, USERPROFILE: own, APPDATA: roaming, LOCALAPPDATA: local, XDG_CONFIG_HOME: path.join(own, '.config'),
-      SEAMTAG_USER_DATA: path.join(own, 'profile')
-    } as Record<string, string>
-  })
+  const app = await electron.launch({ args: [path.resolve(__dirname, '..'), ...HEADLESS, ...(target ? [target] : []), ...extra], env: appEnv(own) })
   const page = await app.firstWindow()
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))

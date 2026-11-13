@@ -16,7 +16,7 @@ shortcuts:
 
 | Key | Default | |
 |---|---|---|
-| `auto_save` | `true` | Save a moment after each change. When off, leaving an image asks. |
+| `auto_save` | `true` | Save a moment after each change. An image with no label file gets none while it has no shapes and no flags, so a shape drawn and undone leaves nothing behind; Save writes the empty file. When off, leaving an image asks. |
 | `display_label_popup` | `false` | Ask for a label after every shape, as labelme does. When off, the label picked in the Labels list (or with 1-9) is used, and the dialog opens only when none is picked. |
 | `with_image_data` | `false` | Put the image in the label file as base64 (`imageData`). labelme 5 called it `store_data`. |
 | `keep_prev` | `false` | An image with no labels starts with the previous image's shapes. |
@@ -59,7 +59,7 @@ shortcuts:
 |---|---|---|
 | `canvas.wheel` | `zoom` | The wheel zooms. `scroll`: it scrolls, as in labelme, and zooms with Ctrl. |
 | `brush.size`, `brush.min`, `brush.max` | `28`, `4`, `200` | The brush and eraser, in screen pixels. |
-| `prelabel.min_area` | `20` | Proposed shapes smaller than this, in pixels, are dropped. |
+| `prelabel.min_area` | `25` | Proposed shapes smaller than this, in pixels, are dropped. The area runs through the centres of the shape's outer pixels, as Seamline measures it. |
 | `label_format` | `labelme` | The format new label files are saved in: `labelme`, or LabelImg's `voc` (Pascal VOC), `yolo` or `createml`. An image that has a label file keeps that file's format, as in LabelImg. |
 
 ## Shortcuts

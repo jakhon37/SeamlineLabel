@@ -8,8 +8,8 @@ import {
   asBox, boxOf, FORMAT_NAMES, holdsBoxesOnly, keepsDifficult, keepsVerified, LABEL_FORMATS, type LabelFormat, NEXT_FORMAT
 } from '../../shared/formats'
 import { accepted, isAi, newShape, scoreOf, type Shape, type ShapeType } from '../../shared/labelfile'
-import { summarize } from '../../shared/labels'
-import { labelColor, withAlpha } from './colors'
+import { EMPTY_SUMMARY, summarize } from '../../shared/labels'
+import { labelColor, labelList, recolored, withAlpha, withClass } from './colors'
 import { eraseShapes, paintShapes, strokeRegion } from './geometry'
 import LabelDialog, { flagsFor, type LabelChoice, type LabelRequest } from './LabelDialog'
 import { ContextMenu } from './Menu'
@@ -19,8 +19,8 @@ import {
   moveCorner, moveShapes, nearestEdge, nearestVertex, outline, type Pt, reprojectCorners, rotatePoints, rotationHandles, squareFrom, toEdge, vertices
 } from './shapes'
 import {
-  type DrawnShape, fileUrl, type ImageItem, type Loaded, type ModelInfo, type OpenImage, type OpenProject, plainError, type PrelabelModel, type ProjectInfo,
-  type ProposedShape
+  type DrawnShape, fileUrl, type ImageItem, type LabelClass, type Loaded, type ModelInfo, type OpenImage, type OpenProject, plainError, type PrelabelModel,
+  type ProjectInfo, type ProposedShape, type RunModel
 } from './types'
 
 export type Mode = 'edit' | 'polygon' | 'rectangle' | 'oriented_rectangle' | 'circle' | 'line' | 'point' | 'linestrip' | 'ai_points' | 'ai_box' | 'brush' | 'eraser'
@@ -46,7 +46,10 @@ export type Settings = {
   aiOutput: AiOutput
   /** The model for the AI text prompt */
   aiTextModel: string
+  /** The pre-labelling model last picked with Choose a model…, for folders with no runs and none chosen */
   prelabelModel: string
+  /** The pre-labelling model chosen for each folder: from its runs in the menu, or with Choose a model… */
+  prelabelModels: Record<string, string>
   docks: { files: boolean; labels: boolean; shapes: boolean; flags: boolean }
   dark: boolean
   /** Where new labels are saved; it follows the label file of the image opened, as in LabelImg */
@@ -65,7 +68,13 @@ export type Settings = {
 
 export type Command = { label: string; run: () => void; enabled?: () => boolean; checked?: () => boolean; shortcut?: ShortcutName; keys?: string }
 export type Commands = Record<string, Command>
-export type LabelerHandle = { commands: Commands; canLeave: () => Promise<boolean> }
+/**
+ * `canLeave`: saves, or asks about, unsaved work; for another `folder`, a pre-label batch running
+ * here stops first, if the user agrees. `show`: opens that image, once what's on screen is saved,
+ * or asked about. `busy`: what here waits on the user, such as a dialog, which opening another
+ * image or folder would cut short, said for the user; '' when nothing does.
+ */
+export type LabelerHandle = { commands: Commands; canLeave: (folder?: boolean) => Promise<boolean>; show: (name: string) => void; busy: () => string }
 
 type Filter = 'all' | 'label' | 'review' | 'done'
 type Props = {
@@ -73,11 +82,15 @@ type Props = {
   config: Config
   settings: Settings
   setSettings: (fn: (s: Settings) => Settings) => void
-  setProject: (p: ProjectInfo) => void
+  /** `shown`: the label list, whose colours a folder's first class list takes */
+  setProject: (p: ProjectInfo, shown?: LabelClass[]) => void
   setImages: (fn: (images: ImageItem[]) => ImageItem[]) => void
   discovered: string[]
   mac: boolean
-  onError: (m: string) => void
+  /** `image`: the image on screen the message is about, by its folder and name, so it goes once another image is */
+  onError: (m: string, image?: string) => void
+  /** Another image is on screen, by its folder and name */
+  onShown: (image: string) => void
   onOpenMenu: (x: number, y: number) => void
   onChange: () => void
   /** Where label files go: another folder, or back next to the images */
@@ -109,10 +122,17 @@ const FILTERS: { key: Filter; name: string; title: string; test: (i: ImageItem) 
   { key: 'done', name: 'Done', title: 'Labelled, nothing left to review', test: (i) => i.labelled && !i.ai && !i.broken }
 ]
 const percent = (score: number) => `${Math.round(score * 100)}%`
+const RELOADED = 'These labels changed in another app (such as Seamline), so they were reloaded.'
 const COLOR_TITLES = { line: 'Shape line colour', fill: 'Shape fill colour', draw: 'Box line colour' }
 const MODE_NAMES: Record<Mode, string> = {
   edit: 'Edit', polygon: 'Polygon', rectangle: 'Rectangle', oriented_rectangle: 'Rotated box', circle: 'Circle', line: 'Line', point: 'Point',
   linestrip: 'Line strip', ai_points: 'AI points', ai_box: 'AI box', brush: 'Brush', eraser: 'Eraser'
+}
+
+/** The pre-labelling models chosen for folders, with this folder's choice: the last 50 folders' are kept */
+function chooseFor(chosen: Record<string, string>, root: string, model: string) {
+  const { [root]: _, ...rest } = chosen
+  return Object.fromEntries([...Object.entries(rest), [root, model]].slice(-50))
 }
 
 // Least certain first; shapes without a score come last
@@ -160,14 +180,16 @@ function maskCanvas(mask: string, color: string, onReady: () => void) {
 }
 
 const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
-  const { data, config, settings, setSettings, setProject, setImages, discovered, mac, onError, onOpenMenu, onChange, onChangeOutput, onNextToImages } = props
+  const { data, config, settings, setSettings, setProject, setImages, discovered, mac, onError, onShown, onOpenMenu, onChange, onChangeOutput, onNextToImages } = props
   const { project, images, root } = data
   const [index, setIndex] = useState(() => Math.max(0, data.select ? images.findIndex((i) => i.name === data.select) : 0))
   const [query, setQuery] = useState(config.file_search ?? '')
   const [filter, setFilter] = useState<Filter>('all')
   const [sort, setSort] = useState<'name' | 'certainty'>('name')
   const [mode, setModeState] = useState<Mode>('polygon')
-  const [activeClass, setActiveClass] = useState<number | null>(0)
+  // The label new shapes get, by its name, as another app changing the folder's classes moves labels
+  // in the list: the list's first until one is picked, and null to be asked each time
+  const [picked, setPicked] = useState<string | null | undefined>(undefined)
   const [shapes, setShapesState] = useState<Shape[]>([])
   const [selected, setSelectedState] = useState<number[]>([])
   const [imageFlags, setImageFlags] = useState<Record<string, boolean>>({})
@@ -200,6 +222,8 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   const [aiIou, setAiIou] = useState(0.5)
   const [download, setDownload] = useState<{ name: string; model: string; done: number; total: number } | null>(null)
   const [prelabelModel, setPrelabelModel] = useState<PrelabelModel | null>(null)
+  // Models Seamline exported from this folder's training runs, newest first; null until read
+  const [runModels, setRunModels] = useState<RunModel[] | null>(null)
   const [dragOver, setDragOver] = useState<number | null>(null)
   const [, setTick] = useState(0)
 
@@ -231,8 +255,10 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   const tiles = useRef(new Map<string, HTMLImageElement>())
   const frame = useRef(0)
   const saveTimer = useRef<ReturnType<typeof setTimeout>>()
+  // `byHand`: Save, Save As or Save when asked, which writes an empty label file as labelme does; other saves are automatic
   const pending = useRef<{
     name: string; shapes: Shape[]; flags: Record<string, boolean>; size: [number, number]; format: LabelFormat; verified: boolean; from: LabelFormat | null
+    byHand?: boolean
   } | null>(null)
   // The format of the image's label file, and the one it's being switched from until the switch is saved
   const fileFormat = useRef<LabelFormat | null>(null)
@@ -261,17 +287,28 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   // A Fit to Selection put off until the mouse button is up and a double-click's time has passed
   const pendingFit = useRef(false)
   const fitTimer = useRef<ReturnType<typeof setTimeout>>()
+  // The list and the image picked in it, for work that finishes after a render
+  const listRef = useRef({ images, index })
+  listRef.current = { images, index }
+  // The folder being read again, and whether the window came back meanwhile, so it's read once more
+  const refreshing = useRef({ running: false, again: false })
+  // Pre-labelling under way, which writes into this folder as it goes, until it ends; and how far a batch is
+  const prelabelling = useRef<Promise<unknown> | null>(null)
+  const batchRef = useRef(batch)
+  batchRef.current = batch
 
+  // The label list as it was when a label was last added or recoloured here, which keeps its order
+  const keptLabels = useRef<string[] | null>(null)
   // The label list: config labels, then a Seamline project's classes, then labels found in the files
-  const classes = useMemo(() => {
-    const names: string[] = []
-    const add = (n: string) => n && !names.includes(n) && names.push(n)
-    ;(config.labels ?? []).forEach(add)
-    project.classes.forEach((c) => add(c.name))
-    discovered.forEach(add)
-    shapes.forEach((s) => add(s.label))
-    return names.map((name, i) => ({ name, color: labelColor(name, i, config, project.classes.find((c) => c.name === name)?.color) }))
-  }, [config, project.classes, discovered, shapes])
+  const classes = useMemo(() => labelList(config, project.classes, [...discovered, ...shapes.map((s) => s.label)], keptLabels.current),
+    [config, project.classes, discovered, shapes])
+  const pickedAt = picked ? classes.findIndex((c) => c.name === picked) : picked === undefined && classes.length ? 0 : -1
+  const activeClass = pickedAt >= 0 ? pickedAt : null
+  useEffect(() => {
+    if (picked === undefined && classes.length) setPicked(classes[0].name)
+    // Gone from the list, as a class another app deleted: new shapes ask for their label
+    else if (picked && !classes.some((c) => c.name === picked)) setPicked(null)
+  }, [classes, picked])
   const opts = useRef({ showShapes, settings, classes, mode, activeClass, brushSize, bc })
   opts.current = { showShapes, settings, classes, mode, activeClass, brushSize, bc }
   // labelme 7's allow_out_of_bounds_points: points may go past the image's edge
@@ -714,15 +751,41 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     setScale(view.current.scale * factor, at)
   }
 
+  /**
+   * Another app, such as Seamline, changed the labels of the image on screen since the window read
+   * them: they're read again, and what was being done here is dropped, as the note says
+   */
+  const reloadChanged = useCallback((name: string, note = '') => {
+    const { images: list, index: at } = listRef.current
+    if (list[at]?.name !== name) return
+    clearTimeout(saveTimer.current)
+    pending.current = null
+    dirty.current = false
+    setSaved('saved')
+    setReload((n) => n + 1)
+    if (note) onError(`${RELOADED} ${note}`, `${root}\n${name}`)
+    else setNotice(RELOADED)
+  }, [onError, root])
+  /** Nothing here that reading the labels again would lose: no unsaved change, and nothing being drawn, dragged or asked */
+  const idle = useCallback(() => !dirty.current && !drag.current && !draft.current && !document.querySelector('.modal-back, .context'), [])
+
   // Saving: a moment after each change when saving is automatic, or when asked
   const doSave = useCallback(async (job: NonNullable<typeof pending.current>, target?: string) => {
     setSaved('saving')
     try {
-      const { item, replaced, kept, format } = await window.api.saveLabels(root, job.name, {
+      const result = await window.api.saveLabels(root, job.name, {
         shapes: job.shapes.map(({ hidden: _h, ...s }) => s), flags: job.flags, size: job.size,
         storeData: settingsRef.current.storeData, target, format: job.format, verified: job.verified,
-        classes: opts.current.classes.map((c) => c.name), from: job.from ?? undefined
+        classes: opts.current.classes.map((c) => c.name), from: job.from ?? undefined, auto: !job.byHand
       })
+      if ('changed' in result) {
+        // Nothing was written over them
+        const { images: list, index: at } = listRef.current
+        if (list[at]?.name === job.name) reloadChanged(job.name, "Your last change wasn't saved.")
+        else onError(`The labels of ${job.name} changed in another app (such as Seamline), so your last change to them wasn't saved.`)
+        return false
+      }
+      const { item, replaced, kept, format } = result
       if (!target) setImages((all) => all.map((i) => (i.name === job.name ? { ...i, ...item } : i)))
       if (!target && loadedName.current === job.name) {
         fileFormat.current = format
@@ -730,7 +793,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       }
       const file = (p: string) => p.split(/[\\/]/).pop()
       if (replaced) setNotice((n) => `${n ? `${n} ` : ''}Its old ${file(replaced)} went to the trash.`)
-      if (kept) onError(`Saved as ${FORMAT_NAMES[format]}, but ${kept}`)
+      if (kept && format) onError(`Saved as ${FORMAT_NAMES[format]}, but ${kept}`)
       if (pending.current === null && loadedName.current === job.name) dirty.current = false
       setSaved(dirty.current ? 'unsaved' : 'saved')
       return true
@@ -739,7 +802,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       setSaved('unsaved')
       return false
     }
-  }, [root, setImages, onError])
+  }, [root, setImages, onError, reloadChanged])
 
   const flush = useCallback(async () => {
     clearTimeout(saveTimer.current)
@@ -799,7 +862,10 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     if (settingsRef.current.autoSave) return flush()
     const name = loadedName.current
     const answer = await window.api.ask(`Save the changes to ${name}?`, "They're lost if you don't save them.", ['Save', "Don't save", 'Cancel'])
-    if (answer === 0) return flush()
+    if (answer === 0) {
+      if (pending.current) pending.current.byHand = true
+      return flush()
+    }
     if (answer === 1) {
       pending.current = null
       dirty.current = false
@@ -808,13 +874,32 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     }
     return false
   }, [flush])
+  /** Before another folder opens: a pre-label batch, which writes into this one, stops if the user agrees, and after the image it's on */
+  const canLeaveFolder = useCallback(async () => {
+    const run = batchRef.current
+    if (run && (await window.api.ask('Stop pre-labelling?', `${run.done} of ${run.total} images are done and keep their labels. The rest aren't pre-labelled.`, ['Stop', 'Cancel'])) !== 0) return false
+    if (!(await canLeave())) return false
+    if (prelabelling.current) {
+      window.api.prelabelStop()
+      await prelabelling.current.catch(() => {})
+    }
+    return true
+  }, [canLeave])
+  /** What here waits on the user, which opening another image or folder would cut short: '' when nothing does */
+  const busy = useCallback(() => {
+    if (window.api.asking() || document.querySelector('.modal-back, .context')) return 'A dialog or menu is open here: close it, then try again.'
+    if (draft.current || (drag.current && drag.current.kind !== 'pan')) return 'A shape is being drawn here: finish it, then try again.'
+    return ''
+  }, [])
 
   // Load the current image; older requests are dropped if you move on quickly
   useEffect(() => {
     const name = images[index]?.name
     if (!name) return
     let stale = false
-    setLoading(true)
+    // The same image again, as when its labels changed elsewhere: the view stays where it is
+    const again = name === loadedName.current
+    if (!again) setLoading(true)
     const rememberHistory = () => {
       const last = loadedName.current
       if (!last) return
@@ -825,7 +910,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     }
     ;(async () => {
       await flush()
-      const copy = settingsRef.current.keepPrev || copyOnLoad.current
+      const copy = !again && (settingsRef.current.keepPrev || copyOnLoad.current)
       copyOnLoad.current = false
       try {
         // Labels last: a big image can take a while, and pre-labelling may write meanwhile
@@ -835,13 +920,20 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
         let found: Loaded | null = null
         let broken = ''
         try {
-          found = await window.api.loadLabels(root, name, formatRef.current, [m.width, m.height])
+          found = await window.api.loadLabels(root, name, formatRef.current, [m.width, m.height], true)
           doc = found.doc
         } catch (e) {
           broken = plainError(e)
         }
         if (stale) return
+        // Read again, as when a save was refused for another app's change: the lists count these labels, not the change dropped
+        if (again && !broken) {
+          const item = { ...summarize(doc?.shapes ?? [], !!found?.format), broken: undefined, verified: found?.verified || undefined }
+          setImages((all) => all.map((i) => (i.name === name ? { ...i, ...item } : i)))
+        }
         rememberHistory()
+        // Undo would bring back what was there before another app changed it
+        if (found?.changed) history.current.delete(name)
         const kept = history.current.get(name)
         const fromReview = reviewOnLoad.current
         const undoHere = undoOnLoad.current
@@ -854,6 +946,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
         const flags: Record<string, boolean> = {}
         ;(config.flags ?? []).forEach((f) => (flags[f] = false))
         Object.assign(flags, doc?.flags ?? {})
+        const sameView = again && metaRef.current?.width === m.width && metaRef.current?.height === m.height
         metaRef.current = m
         loadedName.current = name
         readOnlyRef.current = broken
@@ -891,13 +984,18 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
         dirty.current = false
         pending.current = null
         setSaved('saved')
+        // What was said of the last image's labels isn't about these
+        if (!again) {
+          setNotice((n) => (n === RELOADED ? '' : n))
+          onShown(`${root}\n${name}`)
+        }
         if (!settingsRef.current.keepPrevBC) setBc(bcByImage.current.get(name) ?? { brightness: 1, contrast: 1 })
-        if (settingsRef.current.keepPrevScale && lastScale.current !== null) {
+        if (!sameView && settingsRef.current.keepPrevScale && lastScale.current !== null) {
           const canvas = canvasRef.current!
           const s = lastScale.current
           view.current = { scale: s, x: (canvas.clientWidth - m.width * s) / 2, y: (canvas.clientHeight - m.height * s) / 2 }
           setZoom(s)
-        } else fit(settingsRef.current.fit === 'width' ? 'width' : 'window')
+        } else if (!sameView) fit(settingsRef.current.fit === 'width' ? 'width' : 'window')
         if (copied) queueSave()
         if (broken) onError(`${name}: its label file can't be read, so it's shown without labels and won't be changed. ${broken}`)
         if (undoHere) stepHistory(undo, redo)
@@ -927,8 +1025,9 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       }
     })()
     return () => { stale = true }
+    // By name: images another app adds or removes move it in the list, which doesn't load it again
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index, images[index]?.name, root, reload])
+  }, [images[index]?.name, root, reload])
 
   useEffect(invalidate, [showShapes, settings.fill, settings.fillDrawing, settings.displayLabels, verified, selected, mode, activeClass, brushSize, classes, bc, invalidate])
   // LabelImg's formats keep boxes: a tool for other shapes gives way to the rectangle
@@ -963,9 +1062,11 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     alive.current = true
     return () => { alive.current = false }
   }, [])
-  useEffect(() => window.api.onPrelabel(({ root: at, name, shapes: found, done, total }) => {
+  useEffect(() => window.api.onPrelabel(({ root: at, name, shapes: found, changed, done, total }) => {
     if (at !== root) return
     setBatch(done >= total ? null : { done, total })
+    // Left alone, as another app changed it since the window read it: read again, unless something here isn't saved yet
+    if (changed && name === loadedName.current && idle()) reloadChanged(name)
     if (!found) return
     history.current.delete(name)
     if (name === loadedName.current) {
@@ -986,7 +1087,64 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       invalidate()
     }
     setImages((all) => all.map((i) => (i.name === name ? { ...i, ...summarize(found, true) } : i)))
-  }), [invalidate, root, setImages])
+  }), [invalidate, root, setImages, idle, reloadChanged])
+  useEffect(() => {
+    window.api.prelabelModels(root).then((list) => alive.current && setRunModels(list)).catch(() => alive.current && setRunModels([]))
+  }, [root])
+  // The folder as another app, such as Seamline, left it: models it exported, images added or
+  // removed, label files rewritten. One read at a time; the window coming back meanwhile reads it once more.
+  const refreshFolder = useCallback(async () => {
+    const state = refreshing.current
+    if (state.running) {
+      state.again = true
+      return
+    }
+    state.running = true
+    try {
+      do {
+        state.again = false
+        window.api.prelabelModels(root).then((list) => alive.current && setRunModels(list)).catch(() => {})
+        const { names, added } = await window.api.refreshProject(root)
+        if (!alive.current) return
+        const { images: list, index: at } = listRef.current
+        const showing = list[at]?.name
+        const present = new Set(names)
+        let next = names
+        // The image on screen stays, even when another app removed it, until the window moves on: it's still shown, and saved
+        if (showing !== undefined && !present.has(showing)) {
+          const before = list.slice(0, at).map((i) => i.name).filter((n) => present.has(n)).pop()
+          const k = before === undefined ? 0 : names.indexOf(before) + 1
+          next = [...names.slice(0, k), showing, ...names.slice(k)]
+        }
+        if (next.length !== list.length || next.some((n, i) => list[i].name !== n)) {
+          const fresh = new Map(added.map((i) => [i.name, i]))
+          setImages((all) => {
+            const byName = new Map(all.map((i) => [i.name, i]))
+            return next.map((n) => byName.get(n) ?? fresh.get(n) ?? { ...EMPTY_SUMMARY, name: n })
+          })
+          setIndex(showing === undefined ? 0 : next.indexOf(showing))
+        }
+        // Counts follow for the label files that changed
+        await window.api.summarize(root)
+      } while (state.again && alive.current)
+    } catch {
+      // Tried again the next time the window comes back
+    } finally {
+      state.running = false
+    }
+  }, [root, setImages])
+  useEffect(() => window.api.onFocus(async () => {
+    // The image on screen first: its few label files are read at once, where the whole folder can take seconds
+    const name = loadedName.current
+    if (name && (await window.api.labelsChanged(root, name).catch(() => false)) && alive.current && loadedName.current === name) {
+      if (idle()) reloadChanged(name)
+      // Saving by hand, changes can wait a long time: told now, rather than when saving drops them
+      else if (dirty.current && !settingsRef.current.autoSave) {
+        onError('These labels changed in another app (such as Seamline). Saving will reload them, and the changes made here since will be lost: copy any shapes you want to keep first.', `${root}\n${name}`)
+      }
+    }
+    if (alive.current) refreshFolder()
+  }), [root, idle, reloadChanged, onError, refreshFolder])
   useEffect(() => window.api.onAiDownload((p) => setDownload(p.done >= p.total ? null : p)), [])
   // Fit to Selection follows the selection, as labelme 7 does: once the mouse button is up and a
   // double-click's time has passed, since a press that selects a shape may become a drag of it, or
@@ -1005,10 +1163,14 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   useEffect(() => {
     if (models && !models.some((m) => m.name === settings.aiModel && (m.points || m.box))) setSettings((s) => ({ ...s, aiModel: 'sam2:latest' }))
   }, [models, settings.aiModel, setSettings])
+  // The pre-labelling model chosen for this folder, or in a folder with no runs, the one last picked as a file
+  const chosenModel = settings.prelabelModels[root] || (runModels && !runModels.length ? settings.prelabelModel : '')
   useEffect(() => {
-    if (!settings.prelabelModel) return setPrelabelModel(null)
-    window.api.prelabelInfo(settings.prelabelModel).then(setPrelabelModel).catch(() => setPrelabelModel(null))
-  }, [settings.prelabelModel])
+    if (!chosenModel) return setPrelabelModel(null)
+    let stale = false
+    window.api.prelabelInfo(chosenModel).then((m) => !stale && setPrelabelModel(m)).catch(() => !stale && setPrelabelModel(null))
+    return () => { stale = true }
+  }, [chosenModel])
   useEffect(() => {
     const broken = images.filter((i) => i.broken)
     if (!broken.length) return
@@ -1081,8 +1243,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     const next = [...shapesRef.current, ...list]
     setShapes(next)
     setSelected(list.map((_, k) => next.length - list.length + k))
-    const at = classes.findIndex((c) => c.name === label)
-    if (at >= 0) setActiveClass(at)
+    if (classes.some((c) => c.name === label)) setPicked(label)
     // LabelImg's beginner mode: one shape, then back to editing
     if (!settingsRef.current.advanced) setMode('edit')
   }
@@ -1577,8 +1738,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
       // Painting with a shape selected continues that shape's class
       const label = (only !== null && list[only]?.label) || currentLabel()
       if (!label) return setNotice('Pick a class in the Labels list to paint with.')
-      const at = classes.findIndex((c) => c.name === label)
-      if (at >= 0) setActiveClass(at)
+      if (classes.some((c) => c.name === label)) setPicked(label)
       setSelected([])
       setShapes(paintShapes(list, region, label))
     } catch (err) {
@@ -1643,7 +1803,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     setShapes(shapesRef.current.map((s, k) => (which.includes(k) ? { ...accepted(s), label, flags: { ...flagsFor(label, config.label_flags, s.flags), ...accepted(s).flags } } : s)))
   }
   const chooseClass = (i: number) => {
-    setActiveClass(i)
+    setPicked(classes[i].name)
     if (selectedRef.current.length) relabel(selectedRef.current, classes[i].name)
   }
 
@@ -1693,12 +1853,36 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     return list
   }, [images, query, filter, sort])
 
+  // An image asked for from outside, as when Seamtag is started again on it: one another app added
+  // since the list was read opens once the list is read again, unless another is opened first
+  const askedFor = useRef<string | null>(null)
   const goTo = useCallback(async (i: number, copy = false) => {
+    askedFor.current = null
     if (i === index || i < 0 || i >= images.length) return
     if (!(await canLeave())) return
     copyOnLoad.current = copy
     setIndex(i)
   }, [index, images.length, canLeave])
+  const show = (name: string) => {
+    const i = images.findIndex((x) => x.name === name)
+    // A dialog, a menu or a shape being drawn would be cut short, or a label given to the wrong image: it says so instead
+    const waiting = i === index ? '' : busy()
+    if (waiting) return onError(`${name} wasn't opened. ${waiting}`)
+    if (i >= 0) return void goTo(i)
+    askedFor.current = name
+    refreshFolder()
+  }
+  useEffect(() => {
+    const name = askedFor.current
+    const i = name === null ? -1 : images.findIndex((x) => x.name === name)
+    if (i < 0) return
+    askedFor.current = null
+    // A dialog, a menu or a shape drawn while the folder was read again isn't cut short either
+    const waiting = i === index ? '' : busy()
+    if (waiting) return onError(`${name} wasn't opened. ${waiting}`)
+    goTo(i)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [images, goTo])
   const go = (delta: number, copy = false) => {
     const at = visible.findIndex((v) => v.i === index)
     const next = visible[Math.max(0, Math.min(visible.length - 1, (at < 0 ? 0 : at) + delta))]
@@ -1907,7 +2091,8 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     pending.current = null
     dirty.current = false
     try {
-      await window.api.trashLabels(root, name, formatRef.current)
+      const gone = await window.api.trashLabels(root, name, formatRef.current)
+      if (gone && typeof gone === 'object') return reloadChanged(name, 'Nothing was deleted.')
       history.current.delete(name)
       fileFormat.current = null
       switchedFrom.current = null
@@ -1934,7 +2119,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     saveTarget.current = target
     pending.current = {
       name, shapes: shapesRef.current, flags: flagsRef.current, size: [metaRef.current.width, metaRef.current.height], format: formatRef.current,
-      verified: verifiedRef.current, from: null
+      verified: verifiedRef.current, from: null, byHand: true
     }
     await flush()
   }
@@ -1943,7 +2128,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     if (!name || !metaRef.current || readOnlyRef.current) return
     pending.current = {
       name, shapes: shapesRef.current, flags: flagsRef.current, size: [metaRef.current.width, metaRef.current.height], format: formatRef.current,
-      verified: verifiedRef.current, from: switchedFrom.current
+      verified: verifiedRef.current, from: switchedFrom.current, byHand: true
     }
     await flush()
   }
@@ -1952,46 +2137,79 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   const toPrelabel = images.filter((i) => !i.broken && !i.count && !(i.labelled && !i.ai))
   const pickModel = async () => {
     try {
-      const model = await window.api.prelabelPick()
-      if (model) setSettings((s) => ({ ...s, prelabelModel: model.path }))
+      const model = await window.api.prelabelPick(root)
+      // For this folder, and for folders with no runs and no model of their own
+      if (model) setSettings((s) => ({ ...s, prelabelModel: model.path, prelabelModels: chooseFor(s.prelabelModels, root, model.path) }))
       return model
     } catch (e) {
       onError(plainError(e))
       return null
     }
   }
+  /**
+   * The model chosen for this folder. With none, the newest one its runs exported, as the folder is
+   * now; in a folder with no runs, the model last picked as a file; or else one picked now.
+   */
+  const modelToUse = async () => {
+    const { prelabelModels: chosen, prelabelModel: picked } = settingsRef.current
+    const here = chosen[root]
+    const runs = here ? null : await window.api.prelabelModels(root).catch(() => runModels ?? [])
+    if (runs && alive.current) setRunModels(runs)
+    const newest = runs?.[0]
+    const file = here || newest?.path || picked
+    if (!file) return pickModel()
+    if (prelabelModel?.path === file) return prelabelModel
+    try {
+      return await window.api.prelabelInfo(file)
+    } catch (e) {
+      // A model chosen before that's gone: another one, as a file
+      if (!newest || file !== newest.path) return pickModel()
+      onError(`${newest.title} can't be used: ${plainError(e)}`)
+      return null
+    }
+  }
+  // A model another folder's run exported says which folder
+  const modelTitle = (m: PrelabelModel) => (m.project && m.project !== root ? `${m.name} · from ${m.project.split(/[\\/]/).pop()}` : m.name)
+  // What pre-labelling would use, for the buttons' tips
+  const prelabelName = chosenModel ? (prelabelModel?.path === chosenModel ? modelTitle(prelabelModel) : null) : runModels?.[0]?.title ?? null
   const modelClasses = (model: PrelabelModel) => (model.classes.length ? model.classes : classes.map((c) => c.name))
   const prelabelOne = async () => {
-    const model = prelabelModel ?? (await pickModel())
+    const model = await modelToUse()
     if (!model) return
     const name = loadedName.current
     if (!name || readOnlyRef.current) return
     setBusyAi('Predicting…')
     try {
       await flush()
-      const result = await window.api.prelabelRun(root, model.path, [name], modelClasses(model))
+      const run = (prelabelling.current = window.api.prelabelRun(root, model.path, [name], modelClasses(model)))
+      const result = await run
       if (result.error) onError(`Pre-label failed: ${result.error}`)
       else if (result.failed.length) onError(`Pre-label failed: ${result.failed[0]}`)
+      // In Seamline's words: nothing was written, as an empty label file would read as cleared by someone
+      else if (result.nothing.includes(name)) setNotice(`The model found nothing on ${name}, so its labels stay as they were.`)
     } catch (e) {
       onError(`Pre-label failed: ${plainError(e)}`)
     } finally {
+      prelabelling.current = null
       setBusyAi('')
       setBatch(null)
     }
   }
   const prelabelAll = async () => {
-    const model = prelabelModel ?? (await pickModel())
+    const model = await modelToUse()
     if (!model) return
     await flush()
     setBatch({ done: 0, total: toPrelabel.length })
     try {
-      const result = await window.api.prelabelRun(root, model.path, toPrelabel.map((i) => i.name), modelClasses(model))
+      const run = (prelabelling.current = window.api.prelabelRun(root, model.path, toPrelabel.map((i) => i.name), modelClasses(model), true))
+      const result = await run
       setNotice(`${result.stopped ? 'Stopped after' : 'Pre-labelled'} ${result.done} of ${result.total} images.`)
       if (result.error) onError(`Pre-labelling stopped early: ${result.error}`)
       else if (result.failed.length) onError(`${result.failed.length} ${result.failed.length === 1 ? 'image' : 'images'} failed. First: ${result.failed[0]}`)
     } catch (e) {
       onError(`Pre-label failed: ${plainError(e)}`)
     } finally {
+      prelabelling.current = null
       setBatch(null)
     }
   }
@@ -2001,12 +2219,15 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     if (!name || classes.some((c) => c.name === name)) return
     if (config.validate_label === 'exact' && !config.labels?.includes(name)) return onError(`“${name}” isn't in the label list, and only listed labels are allowed.`)
     const color = labelColor(name, classes.length, config)
-    setProject({ ...project, classes: [...classes.map((c) => ({ name: c.name, color: c.color })), { name, color }] })
-    setActiveClass(classes.length)
+    // The folder's classes and this label: the list's other labels aren't classes, and stay in their places
+    keptLabels.current = [...classes.map((c) => c.name), name]
+    setProject({ ...project, classes: withClass(project.classes, name, color) }, classes)
+    setPicked(name)
     setNewClass('')
   }
   const recolor = (name: string, color: string) => {
-    setProject({ ...project, classes: classes.map((c) => ({ name: c.name, color: c.name === name ? color : c.color })) })
+    keptLabels.current = classes.map((c) => c.name)
+    setProject({ ...project, classes: recolored(project.classes, name, color) }, classes)
   }
 
   // LabelImg's Verify Image: a mark that the image has been checked, saved at once
@@ -2113,8 +2334,12 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
     // Nothing more is saved for it, even an edit made while it goes
     loadedName.current = ''
     try {
-      const { kept } = await window.api.trashImage(root, name)
-      if (kept) onError(`${name} went to the trash, but ${kept}`)
+      const gone = await window.api.trashImage(root, name)
+      if ('changed' in gone) {
+        loadedName.current = name
+        return reloadChanged(name, "The image wasn't moved to the trash.")
+      }
+      if (gone.kept) onError(`${name} went to the trash, but ${gone.kept}`)
     } catch (e) {
       loadedName.current = name
       return onError(`It couldn't be moved to the trash: ${plainError(e)}`)
@@ -2290,15 +2515,35 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
   for (const o of AI_OUTPUTS) {
     commands[`ai_output:${o}`] = { label: AI_OUTPUT_NAMES[o], run: () => setSettings((s) => ({ ...s, aiOutput: o })), checked: () => settings.aiOutput === o, enabled: () => !boxesOnly }
   }
+  // The models this folder's runs exported, newest first, and the one chosen if it's another. Newest
+  // run, ticked until a model is chosen for the folder, takes whichever run is newest when pre-labelling
+  // starts, and choosing it again forgets the folder's choice; a run chosen is ticked, and stays.
+  const choices: { path: string; title: string }[] = [...(runModels ?? [])]
+  if (prelabelModel?.path === chosenModel && !choices.some((m) => m.path === chosenModel)) choices.push({ path: prelabelModel.path, title: modelTitle(prelabelModel) })
+  if (runModels?.length) {
+    commands['prelabel_model:newest'] = {
+      label: 'Newest run', checked: () => !chosenModel,
+      run: () => setSettings((s) => ({ ...s, prelabelModels: Object.fromEntries(Object.entries(s.prelabelModels).filter(([k]) => k !== root)) }))
+    }
+  }
+  for (const m of choices) {
+    commands[`prelabel_model:${m.path}`] = {
+      label: m.title, run: () => setSettings((s) => ({ ...s, prelabelModels: chooseFor(s.prelabelModels, root, m.path) })), checked: () => chosenModel === m.path
+    }
+  }
   for (const f of LABEL_FORMATS) {
     commands[`format:${f}`] = { label: FORMAT_NAMES[f], run: () => setFormat(f), checked: () => settings.format === f, enabled: () => !images[index]?.embedded }
   }
   const commandsRef = useRef(commands)
   commandsRef.current = commands
+  const showRef = useRef(show)
+  showRef.current = show
   useImperativeHandle(ref, () => ({
     get commands() { return commandsRef.current },
-    canLeave
-  }), [canLeave])
+    canLeave: (folder = false) => (folder ? canLeaveFolder() : canLeave()),
+    show: (name: string) => showRef.current(name),
+    busy
+  }), [canLeave, canLeaveFolder, busy])
 
   // Keys: the configurable shortcuts, then the fixed ones (classes, Escape, arrows)
   useEffect(() => {
@@ -2494,7 +2739,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
             </button>
           ) : (
             <button className="ghost batch" onClick={prelabelAll} disabled={!toPrelabel.length || !!busyAi || boxesOnly}
-              title={prelabelModel ? `Run ${prelabelModel.name} on every image with no label file or only AI shapes` : 'Choose a segmentation model (.onnx), then pre-label'}>
+              title={prelabelName ? `Run ${prelabelName} on every image with no label file or only AI shapes` : 'Choose a segmentation model (.onnx), then pre-label'}>
               <Sparkles size={15} /> Pre-label {toPrelabel.length} {toPrelabel.length === 1 ? 'image' : 'images'}
             </button>
           )}
@@ -2566,7 +2811,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
           <div className="spacer" />
           <span className="zoom" title="Zoom">{Math.round(zoom * 1000) / 10}%</span>
           <button className="ghost" onClick={prelabelOne} disabled={!!busyAi || !!batch || !!readOnly || boxesOnly}
-            title={prelabelModel ? `Pre-label with ${prelabelModel.name}` : 'Choose a segmentation model (.onnx), then pre-label this image'}>
+            title={prelabelName ? `Pre-label with ${prelabelName}` : 'Choose a segmentation model (.onnx), then pre-label this image'}>
             <Sparkles size={15} /> {busyAi === 'Predicting…' ? 'Predicting…' : 'Pre-label'}
           </button>
         </div>
@@ -2640,7 +2885,7 @@ const Labeler = forwardRef<LabelerHandle, Props>(function Labeler(props, ref) {
               <div className="classes">
                 {classes.map((c, i) => (
                   <div key={c.name} className={`class ${i === activeClass ? 'on' : ''}`} role="button" tabIndex={0}
-                    onClick={() => (i === activeClass && !selected.length ? setActiveClass(null) : chooseClass(i))}
+                    onClick={() => (i === activeClass && !selected.length ? setPicked(null) : chooseClass(i))}
                     title={i === activeClass ? 'New shapes get this label. Click again to be asked each time.' : 'Label new shapes with this'}>
                     <label className="swatch" style={{ background: c.color }} onClick={(e) => e.stopPropagation()} title="Change colour">
                       <input type="color" value={c.color} onChange={(e) => recolor(c.name, e.target.value)} aria-label={`Colour of ${c.name}`} />

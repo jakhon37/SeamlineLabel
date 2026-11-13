@@ -15,6 +15,8 @@ export type OpenProject = {
   hasProjectFile: boolean
   images: ImageItem[]
   select: string | null
+  /** What Open recent and the last folder keep: what was opened, or the Seamline project a start on an image in its subfolder opened */
+  remembered: string
 }
 export type OpenImage = {
   width: number; height: number; file: string; ms: number
@@ -41,8 +43,16 @@ export type SaveRequest = {
   verified?: boolean
   classes?: string[]
   from?: LabelFormat
+  /** Saved automatically: with nothing to keep, an image with no label file gets none */
+  auto?: boolean
 }
-export type Loaded = { file: string; format: LabelFormat | null; verified: boolean; doc: LabelDoc | null }
+export type Loaded = {
+  file: string; format: LabelFormat | null; verified: boolean; doc: LabelDoc | null
+  /** Opened to edit: another app changed the labels since Seamtag last read or wrote them */
+  changed?: boolean
+}
+/** Nothing was written: another app changed the image's labels since the window read them */
+export type Changed = { changed: string }
 export type ModelInfo = {
   name: string; title: string; textTitle?: string; size: number; downloaded: boolean; downloading: boolean
   license: { name: string; url: string }
@@ -59,7 +69,10 @@ export type AssistRequest = {
 export type TextRequest = Omit<AssistRequest, 'points' | 'labels' | 'drawn'> & { texts: string[]; drawn: DrawnShape[]; iou: number; score: number }
 /** New shapes, and the indexes of drawn shapes the AI found again; `notice` when nothing could be made */
 export type Proposal = { shapes: ProposedShape[]; matched: number[]; notice?: string }
-export type PrelabelModel = { path: string; name: string; classes: string[]; inputSize: number[]; tile: number }
+/** `project`: the folder whose Seamline run exported it, or null */
+export type PrelabelModel = { path: string; name: string; project: string | null; classes: string[]; inputSize: number[]; tile: number }
+/** A model Seamline exported from one of the folder's training runs */
+export type RunModel = { path: string; run: string; title: string }
 
 declare global {
   interface Window {
@@ -69,16 +82,24 @@ declare global {
       pickFile(title: string, filters: { name: string; extensions: string[] }[]): Promise<string | null>
       pickSave(title: string, defaultPath: string, format?: LabelFormat): Promise<string | null>
       ask(message: string, detail: string, buttons: string[]): Promise<number>
-      openProject(target: string, output: string | null): Promise<OpenProject>
+      /** A question or file dialog is open, or about to open */
+      asking(): boolean
+      /** `again`: opened from Open recent or as the last folder, so a folder remembered on an image opens on it */
+      openProject(target: string, output: string | null, started?: boolean, again?: boolean): Promise<OpenProject>
       closeProject(root: string): Promise<void>
-      saveProject(root: string, project: ProjectInfo): Promise<void>
+      saveProject(root: string, project: ProjectInfo, shown?: LabelClass[]): Promise<ProjectInfo>
+      reloadProject(root: string): Promise<ProjectInfo | null>
+      refreshProject(root: string): Promise<{ names: string[]; added: ImageItem[] }>
+      summarize(root: string): Promise<void>
       openImage(root: string, name: string): Promise<OpenImage>
-      loadLabels(root: string, name: string, prefer?: LabelFormat, size?: [number, number]): Promise<Loaded>
-      saveLabels(root: string, name: string, req: SaveRequest): Promise<{ file: string; item: ImageItem; format: LabelFormat; replaced?: string; kept?: string }>
+      loadLabels(root: string, name: string, prefer?: LabelFormat, size?: [number, number], edit?: boolean): Promise<Loaded>
+      /** `format` is null when the image has no label file now: saved automatically, it had nothing to keep */
+      saveLabels(root: string, name: string, req: SaveRequest): Promise<{ file: string; item: ImageItem; format: LabelFormat | null; replaced?: string; kept?: string } | Changed>
+      labelsChanged(root: string, name: string): Promise<boolean>
       labelPath(root: string, name: string, prefer: LabelFormat): Promise<string>
-      trashLabels(root: string, name: string, prefer: LabelFormat): Promise<string | null>
+      trashLabels(root: string, name: string, prefer: LabelFormat): Promise<string | null | Changed>
       readLabelFile(root: string, name: string, file: string, size?: [number, number]): Promise<Loaded & { doc: LabelDoc; format: LabelFormat }>
-      trashImage(root: string, name: string): Promise<{ image: string; kept?: string }>
+      trashImage(root: string, name: string): Promise<{ image: string; kept?: string } | Changed>
       hasLabelsIn(root: string, name: string, format: LabelFormat): Promise<boolean>
       resetSettings(): Promise<void>
       reveal(root: string, name: string): Promise<void>
@@ -86,6 +107,9 @@ declare global {
       openLink(url: string): Promise<void>
       pathForFile(file: File): string
       onSummaries(fn: (p: { root: string; items: ImageItem[]; labels: string[] }) => void): () => void
+      onFocus(fn: () => void): () => void
+      /** Seamtag started again with this: `here` when it's a folder open here, or one of its images */
+      onOpen(fn: (p: { target: string; output: string | null; here: { root: string; name: string | null } | null }) => void): () => void
       onFlush(fn: () => void): () => void
       flushed(ok: boolean): void
       onError(fn: (message: string) => void): () => void
@@ -97,11 +121,13 @@ declare global {
       aiAssist(req: AssistRequest): Promise<Proposal>
       aiText(req: TextRequest): Promise<Proposal>
       mergeMasks(shapes: { points: number[][]; mask: string }[]): Promise<{ points: number[][]; mask: string }>
-      prelabelPick(): Promise<PrelabelModel | null>
+      prelabelPick(root?: string): Promise<PrelabelModel | null>
       prelabelInfo(path: string): Promise<PrelabelModel>
-      prelabelRun(root: string, model: string, names: string[], classes: string[]): Promise<{ done: number; total: number; stopped: boolean; failed: string[]; error?: string }>
+      prelabelModels(root: string): Promise<RunModel[]>
+      /** `nothing`: the images the model found nothing on, which keep their labels as they were */
+      prelabelRun(root: string, model: string, names: string[], classes: string[], batch?: boolean): Promise<{ done: number; total: number; stopped: boolean; failed: string[]; nothing: string[]; error?: string }>
       prelabelStop(): Promise<void>
-      onPrelabel(fn: (p: { root: string; name: string; shapes: Shape[] | null; done: number; total: number }) => void): () => void
+      onPrelabel(fn: (p: { root: string; name: string; shapes: Shape[] | null; done: number; total: number; changed: boolean }) => void): () => void
     }
   }
 }
